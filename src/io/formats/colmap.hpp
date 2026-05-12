@@ -10,9 +10,9 @@
 #include "io/error.hpp"
 #include "io/loader.hpp"
 #include <filesystem>
+#include <glm/glm.hpp>
 #include <memory>
 #include <vector>
-#include <glm/glm.hpp>
 
 namespace lfs::io {
 

@@ -6,14 +6,14 @@
 #include "io/loaders/colmap_loader.hpp"
 
 #include <atomic>
+#include <cuda_runtime.h>
 #include <filesystem>
 #include <fstream>
+#include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <sstream>
 #include <system_error>
 #include <vector>
-#include <cuda_runtime.h>
-#include <glm/gtc/matrix_transform.hpp>
 
 namespace fs = std::filesystem;
 
