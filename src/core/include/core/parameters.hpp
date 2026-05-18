@@ -258,6 +258,9 @@ namespace lfs::core {
             // Optional splat file for initialization (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)
             std::optional<std::string> init_path = std::nullopt;
 
+            // Optional trained splats to append to the training model before optimizer initialization
+            std::vector<std::filesystem::path> add_splat_paths;
+
             // Checkpoint to resume training from
             std::optional<std::filesystem::path> resume_checkpoint = std::nullopt;
 

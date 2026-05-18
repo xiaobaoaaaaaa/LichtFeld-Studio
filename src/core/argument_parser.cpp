@@ -99,6 +99,7 @@ namespace {
             ::args::ValueFlag<std::string> output_name(paths_group, "output_name", "Output filename (replaces default splat_ITER.ply stem)", {"output-name"});
             ::args::ValueFlag<std::string> config_file(paths_group, "config_file", "LichtFeldStudio config file (json)", {"config"});
             ::args::ValueFlag<std::string> init_path(paths_group, "path", "Initialize from splat file (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)", {"init"});
+            ::args::ValueFlagList<std::string> add_splats(paths_group, "path", "Append trained splat file(s) to the training model before optimizer initialization", {"add-splat"});
 
             ::args::ValueFlag<std::string> import_cameras(paths_group, "path", "Import COLMAP cameras from sparse folder (no images required)", {"import-cameras"});
 
@@ -381,6 +382,16 @@ namespace {
 
                 if (!std::filesystem::exists(lfs::core::utf8_to_path(path_str))) {
                     return std::unexpected(std::format("Initialization file does not exist: {}", path_str));
+                }
+            }
+
+            if (add_splats) {
+                for (const auto& path_str : ::args::get(add_splats)) {
+                    const auto splat_path = lfs::core::utf8_to_path(path_str);
+                    if (!std::filesystem::exists(splat_path)) {
+                        return std::unexpected(std::format("Added splat does not exist: {}", path_str));
+                    }
+                    params.add_splat_paths.push_back(splat_path);
                 }
             }
 

@@ -141,3 +141,38 @@ TEST(ArgumentParserTest, Mesh2SplatParsesMultipleOutputFormats) {
     EXPECT_EQ(mode->params.formats[1], lfs::core::param::OutputFormat::SPZ);
     EXPECT_EQ(mode->params.formats[2], lfs::core::param::OutputFormat::HTML);
 }
+
+TEST(ArgumentParserTest, TrainingParsesAddSplats) {
+    const auto dir = make_test_path("lfs_arg_parser_add_splat");
+    const auto data_path = std::filesystem::path(dir) / "data";
+    const auto output_path = std::filesystem::path(dir) / "output";
+    const auto splat_a = std::filesystem::path(dir) / "background.ply";
+    const auto splat_b = std::filesystem::path(dir) / "sky.sog";
+    std::filesystem::create_directories(data_path);
+    std::filesystem::create_directories(output_path);
+    std::ofstream(splat_a).put('\n');
+    std::ofstream(splat_b).put('\n');
+
+    const std::string data_str = data_path.string();
+    const std::string output_str = output_path.string();
+    const std::string splat_a_str = splat_a.string();
+    const std::string splat_b_str = splat_b.string();
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "--data-path",
+        data_str.c_str(),
+        "--output-path",
+        output_str.c_str(),
+        "--add-splat",
+        splat_a_str.c_str(),
+        "--add-splat",
+        splat_b_str.c_str()};
+
+    auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+
+    ASSERT_EQ((*parsed)->add_splat_paths.size(), 2u);
+    EXPECT_EQ((*parsed)->add_splat_paths[0], splat_a);
+    EXPECT_EQ((*parsed)->add_splat_paths[1], splat_b);
+}
