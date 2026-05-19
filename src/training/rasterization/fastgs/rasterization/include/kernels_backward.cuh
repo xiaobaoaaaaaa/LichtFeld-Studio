@@ -39,7 +39,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float4* __restrict__ w2c,
         const float3* __restrict__ cam_position,
         const float* __restrict__ raw_opacities,
-        const uint* __restrict__ primitive_n_touched_tiles,
+        const std::uint64_t* __restrict__ primitive_n_touched_tiles,
         const float2* __restrict__ grad_mean2d,
         const float* __restrict__ grad_conic,
         float* __restrict__ grad_opacity_helper,
@@ -305,7 +305,7 @@ namespace fast_lfs::rasterization::kernels::backward {
     }
 
     __global__ void adam_step_invisible(
-        const uint* __restrict__ primitive_n_touched_tiles,
+        const std::uint64_t* __restrict__ primitive_n_touched_tiles,
         FusedAdamParam param,
         FusedAdamSettings fused_adam,
         const int extra_grad_kind,

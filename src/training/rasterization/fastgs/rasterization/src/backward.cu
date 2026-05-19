@@ -53,7 +53,7 @@ void fast_lfs::rasterization::backward(
     PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_primitives);
     PerTileBuffers per_tile_buffers = PerTileBuffers::from_blob(per_tile_buffers_blob, n_tiles);
 
-    if (n_instances != 0) {
+    if (n_instances > 0) {
         // Backward blend (template dispatch eliminates densification branch from inner loop)
         auto launch_blend_backward = [&]<DensificationType DENS_TYPE>() {
             kernels::backward::blend_backward_cu<DENS_TYPE><<<n_tiles, config::block_size_blend_backward>>>(
@@ -86,7 +86,7 @@ void fast_lfs::rasterization::backward(
         } else {
             launch_blend_backward.template operator()<DensificationType::None>();
         }
-        CHECK_CUDA(config::debug, "blend_backward")
+        CHECK_CUDA(config::debug, "blend_backward");
 
         // Backward preprocess
         auto launch_preprocess_backward = [&]<bool MIP_FILTER, int ACTIVE_SH_BASES>() {
@@ -131,7 +131,7 @@ void fast_lfs::rasterization::backward(
         } else {
             launch_preprocess_backward_for_mip.template operator()<16>();
         }
-        CHECK_CUDA(config::debug, "preprocess_backward")
+        CHECK_CUDA(config::debug, "preprocess_backward");
     }
 
     auto launch_invisible = [&](const FusedAdamParam& param, const char* name, const int extra_grad_kind = 0) {
@@ -145,7 +145,7 @@ void fast_lfs::rasterization::backward(
             fused_adam.beta1,
             fused_adam.beta2,
             fused_adam.eps);
-        CHECK_CUDA(config::debug, name)
+        CHECK_CUDA(config::debug, name);
     };
 
     launch_invisible(fused_adam.means, "adam_step_invisible (means)");

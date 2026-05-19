@@ -11,10 +11,20 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <limits>
+#include <stdexcept>
+#include <string>
 
 namespace lfs::training {
 
     namespace {
+        [[nodiscard]] int checked_dim_to_int(size_t value, const char* name) {
+            if (value > static_cast<size_t>(std::numeric_limits<int>::max())) {
+                throw std::overflow_error(std::string(name) + " exceeds int range");
+            }
+            return static_cast<int>(value);
+        }
+
         [[nodiscard]] bool has_background_image(const core::Tensor& bg_image) {
             return bg_image.is_valid() && !bg_image.is_empty();
         }
@@ -284,9 +294,9 @@ namespace lfs::training {
         const float* w2c_ptr = viewpoint_camera.world_view_transform_ptr();
         const float* cam_position_ptr = viewpoint_camera.cam_position_ptr();
 
-        const int n_primitives = static_cast<int>(means.shape()[0]);
+        const int n_primitives = checked_dim_to_int(means.shape()[0], "n_primitives");
         const int total_bases_sh_rest = (shN.is_valid() && shN.ndim() >= 2)
-                                            ? static_cast<int>(shN.shape()[1])
+                                            ? checked_dim_to_int(shN.shape()[1], "total_bases_sh_rest")
                                             : 0;
 
         if (n_primitives == 0) {
@@ -460,12 +470,12 @@ namespace lfs::training {
 
         if (grad_image.shape()[0] == 3) {
             is_chw_layout = true;
-            H = static_cast<int>(grad_image.shape()[1]);
-            W = static_cast<int>(grad_image.shape()[2]);
+            H = checked_dim_to_int(grad_image.shape()[1], "grad_image height");
+            W = checked_dim_to_int(grad_image.shape()[2], "grad_image width");
         } else if (grad_image.shape()[2] == 3) {
             is_chw_layout = false;
-            H = static_cast<int>(grad_image.shape()[0]);
-            W = static_cast<int>(grad_image.shape()[1]);
+            H = checked_dim_to_int(grad_image.shape()[0], "grad_image height");
+            W = checked_dim_to_int(grad_image.shape()[1], "grad_image width");
         } else {
             throw std::runtime_error("Unexpected grad_image shape");
         }
@@ -506,7 +516,7 @@ namespace lfs::training {
             grad_alpha.add_(extra);
         }
 
-        const int n_primitives = static_cast<int>(ctx.means.shape()[0]);
+        const int n_primitives = checked_dim_to_int(ctx.means.shape()[0], "n_primitives");
         // densification_info has shape [2, N]
         const bool update_densification_info = gaussian_model._densification_info.ndim() == 2 &&
                                                gaussian_model._densification_info.shape()[1] >= static_cast<size_t>(n_primitives);
@@ -521,8 +531,8 @@ namespace lfs::training {
                 error_map_2d = error_map_2d.squeeze(0);
             }
             assert(error_map_2d.ndim() == 2 &&
-                   static_cast<int>(error_map_2d.shape()[0]) == H &&
-                   static_cast<int>(error_map_2d.shape()[1]) == W &&
+                   checked_dim_to_int(error_map_2d.shape()[0], "error_map height") == H &&
+                   checked_dim_to_int(error_map_2d.shape()[1], "error_map width") == W &&
                    "pixel_error_map must have shape [H, W] or [1, H, W]");
             if (error_map_2d.device() != core::Device::CUDA) {
                 error_map_2d = error_map_2d.cuda();
