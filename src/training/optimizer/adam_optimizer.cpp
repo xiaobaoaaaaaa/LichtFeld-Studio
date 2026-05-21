@@ -957,13 +957,13 @@ namespace lfs::training {
         LOG_DEBUG("Deserialized AdamOptimizer: {} states", num_states);
     }
 
-        void AdamOptimizer::reserve_capacity(const size_t capacity) {
+    void AdamOptimizer::reserve_capacity(const size_t capacity) {
         for (auto& [name, state] : states_) {
             const size_t target_capacity =
                 name == "shN" ? lfs::core::sh_swizzled_float_count(
-                                     capacity,
-                                     static_cast<uint32_t>(splat_data_.active_sh_coeffs_rest()))
-                               : capacity;
+                                    capacity,
+                                    static_cast<uint32_t>(splat_data_.active_sh_coeffs_rest()))
+                              : capacity;
             if (target_capacity > state.capacity) {
                 if (state.grad.is_valid())
                     state.grad.reserve(target_capacity);

@@ -13,8 +13,8 @@ class MRNFStrategyTest_SerializeRoundTripPreservesLrScheduleState_Test;
 class MRNFStrategyTest_DeserializeResizesTransientBuffersToLoadedModel_Test;
 class MRNFStrategyTest_SetOptimizationParamsRecomputesDecayFromCurrentState_Test;
 
-#include "core/parameters.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "training/strategies/mrnf.hpp"
 

@@ -7,10 +7,10 @@
 #include <thread>
 #include <vector>
 
+#include "core/cuda/sh_layout.cuh"
 #include "core/parameters.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
-#include "core/cuda/sh_layout.cuh"
 #include "core/tensor.hpp"
 #include "python/python_runtime.hpp"
 #include "training/training_setup.hpp"
