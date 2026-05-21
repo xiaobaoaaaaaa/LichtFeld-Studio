@@ -63,14 +63,16 @@ namespace lfs::vis::vksplat {
             const std::vector<float>& shN,
             const std::size_t primitive_idx,
             const std::size_t rest_coeff_idx,
-            const std::size_t channel) {
+            const std::size_t channel,
+            const std::uint32_t active_rest) {
             const std::size_t packed_offset = rest_coeff_idx * 3 + channel;
             const std::size_t slot = packed_offset / 4;
             const std::size_t component = packed_offset % 4;
             const std::size_t float4_index =
                 lfs::core::sh_swizzled_index(
                     static_cast<std::uint32_t>(primitive_idx),
-                    static_cast<std::uint32_t>(slot));
+                    static_cast<std::uint32_t>(slot),
+                    active_rest);
             return shN[float4_index * 4 + component];
         }
 
@@ -93,17 +95,19 @@ namespace lfs::vis::vksplat {
             if (!shN) {
                 return std::unexpected(shN.error());
             }
-            const std::size_t expected_floats = lfs::core::sh_swizzled_float_count(n);
+            const std::size_t expected_floats =
+                lfs::core::sh_swizzled_float_count(n, static_cast<std::uint32_t>(active_rest));
             if (shN->size() < expected_floats) {
                 return std::unexpected("VkSplat staged swizzled SH rest tensor is smaller than expected");
             }
 
             const std::size_t rest = std::min<std::size_t>(15, active_rest);
+            const auto active_rest_u32 = static_cast<std::uint32_t>(rest);
             for (std::size_t i = 0; i < n; ++i) {
                 for (std::size_t k = 0; k < rest; ++k) {
                     for (std::size_t c = 0; c < 3; ++c) {
                         packed_sh[((i * 16) + (k + 1)) * 3 + c] =
-                            readSwizzledRestCoeff(*shN, i, k, c);
+                            readSwizzledRestCoeff(*shN, i, k, c, active_rest_u32);
                     }
                 }
             }
@@ -243,7 +247,8 @@ namespace lfs::vis::vksplat {
                 sh0.ptr<float>(),
                 shN_ptr,
                 packed.ptr<float>(),
-                n);
+                n,
+                static_cast<std::uint32_t>(splat_data.active_sh_coeffs_rest()));
             return packed;
         }
 

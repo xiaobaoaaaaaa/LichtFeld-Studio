@@ -19,12 +19,20 @@ namespace gsplat_fwd {
     constexpr float SH_C1 = 0.48860251190292f;
     constexpr float SH_DC_OFFSET = 0.5f; // 3DGS stores colors as (color - 0.5) / C0
     constexpr uint32_t kShReorderSize = 32u;
-    constexpr uint32_t kShRestFloat4PerPrimitive = 12u;
 
-    __device__ __forceinline__ uint32_t shAt(const uint32_t primitive_idx, const uint32_t float4_slot) {
+    __device__ __forceinline__ uint32_t shSlotsForDegree(const uint32_t degree) {
+        const uint32_t d = degree > 3u ? 3u : degree;
+        const uint32_t rest_coeffs = d == 0u ? 0u : (d + 1u) * (d + 1u) - 1u;
+        return (rest_coeffs * 3u + 3u) / 4u;
+    }
+
+    __device__ __forceinline__ uint32_t shAt(
+        const uint32_t primitive_idx,
+        const uint32_t float4_slot,
+        const uint32_t slots_per_primitive) {
         const uint32_t block = primitive_idx / kShReorderSize;
         const uint32_t lane = primitive_idx % kShReorderSize;
-        return block * (kShRestFloat4PerPrimitive * kShReorderSize) + float4_slot * kShReorderSize + lane;
+        return block * (slots_per_primitive * kShReorderSize) + float4_slot * kShReorderSize + lane;
     }
 
     __device__ __forceinline__ float float4_component(const float4 v, const uint32_t component) {
@@ -44,14 +52,15 @@ namespace gsplat_fwd {
         const float4* __restrict__ sh_rest,
         const uint32_t primitive_idx,
         const uint32_t rest_coeff_idx,
-        const uint32_t channel) {
+        const uint32_t channel,
+        const uint32_t slots_per_primitive) {
         if (sh_rest == nullptr) {
             return 0.0f;
         }
         const uint32_t offset = rest_coeff_idx * 3u + channel;
         const uint32_t slot = offset / 4u;
         const uint32_t component = offset % 4u;
-        return float4_component(sh_rest[shAt(primitive_idx, slot)], component);
+        return float4_component(sh_rest[shAt(primitive_idx, slot, slots_per_primitive)], component);
     }
 
     template <typename scalar_t>
@@ -86,9 +95,10 @@ namespace gsplat_fwd {
             const float x = dir.x * inorm;
             const float y = dir.y * inorm;
             const float z = dir.z * inorm;
+            const uint32_t slots_per_primitive = shSlotsForDegree(effective_degree);
 
             const auto coeff = [&](const uint32_t rest_idx) -> float {
-                return swizzled_rest_coeff_channel(sh_rest, global_id, rest_idx, c);
+                return swizzled_rest_coeff_channel(sh_rest, global_id, rest_idx, c, slots_per_primitive);
             };
 
             result += SH_C1 * (-y * coeff(0) + z * coeff(1) - x * coeff(2));
