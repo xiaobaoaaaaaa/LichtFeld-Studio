@@ -97,7 +97,6 @@
 
 namespace lfs::vis {
     struct VulkanSceneInteropTarget {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         VulkanContext::ExternalImage image;
         VulkanContext::ExternalSemaphore semaphore;
         lfs::rendering::CudaVulkanInterop interop;
@@ -121,7 +120,6 @@ namespace lfs::vis {
             uploaded_source_generation = 0;
             ++generation;
         }
-#endif
     };
 } // namespace lfs::vis
 
@@ -3672,7 +3670,6 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::resetVulkanSceneInterop() {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         if (vulkan_scene_interop_.empty()) {
             return;
         }
@@ -3694,9 +3691,6 @@ namespace lfs::vis::gui {
             }
         }
         vulkan_scene_interop_.clear();
-#else
-        vulkan_scene_interop_.clear();
-#endif
     }
 
     bool GuiManager::shouldDeferVulkanInteropResize() const {
@@ -3705,7 +3699,6 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::prepareVulkanSceneInterop(VulkanContext& context) {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         if (vulkan_scene_interop_disabled_) {
             return;
         }
@@ -3899,13 +3892,9 @@ namespace lfs::vis::gui {
         target.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         target.uploaded_source_generation = vulkan_scene_image_generation_;
         ++target.generation;
-#else
-        (void)context;
-#endif
     }
 
     void GuiManager::resetVulkanSplitRightInterop() {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         vulkan_split_right_external_image_ = VK_NULL_HANDLE;
         vulkan_split_right_external_image_view_ = VK_NULL_HANDLE;
         vulkan_split_right_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -3929,13 +3918,9 @@ namespace lfs::vis::gui {
             }
         }
         vulkan_split_right_interop_.clear();
-#else
-        vulkan_split_right_interop_.clear();
-#endif
     }
 
     void GuiManager::prepareVulkanSplitRightInterop(VulkanContext& context) {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         if (vulkan_split_right_interop_disabled_) {
             return;
         }
@@ -4117,13 +4102,9 @@ namespace lfs::vis::gui {
         vulkan_split_right_external_image_view_ = target.image.view;
         vulkan_split_right_external_image_layout_ = target.layout;
         vulkan_split_right_external_image_generation_ = target.generation;
-#else
-        (void)context;
-#endif
     }
 
     void GuiManager::resetVulkanDepthBlitInterop() {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         vulkan_depth_blit_external_image_ = VK_NULL_HANDLE;
         vulkan_depth_blit_external_image_view_ = VK_NULL_HANDLE;
         vulkan_depth_blit_external_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -4147,13 +4128,9 @@ namespace lfs::vis::gui {
             }
         }
         vulkan_depth_blit_interop_.clear();
-#else
-        vulkan_depth_blit_interop_.clear();
-#endif
     }
 
     void GuiManager::prepareVulkanDepthBlitInterop(VulkanContext& context) {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         if (vulkan_depth_blit_interop_disabled_) {
             return;
         }
@@ -4335,9 +4312,6 @@ namespace lfs::vis::gui {
         vulkan_depth_blit_external_image_view_ = target.image.view;
         vulkan_depth_blit_external_image_layout_ = target.layout;
         vulkan_depth_blit_external_image_generation_ = target.generation;
-#else
-        (void)context;
-#endif
     }
 
     VulkanViewportPassParams GuiManager::buildVulkanViewportParams(const VkExtent2D extent,
@@ -4569,26 +4543,18 @@ namespace lfs::vis::gui {
     void GuiManager::recordVulkanViewport(VkCommandBuffer command_buffer,
                                           VkExtent2D extent,
                                           const VulkanViewportPassParams& params) {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         if (!vulkan_viewport_pass_ || command_buffer == VK_NULL_HANDLE ||
             extent.width == 0 || extent.height == 0) {
             return;
         }
         vulkan_viewport_pass_->record(command_buffer, extent, params);
-#else
-        (void)command_buffer;
-        (void)extent;
-        (void)params;
-#endif
     }
 
     void GuiManager::render() {
         auto* window_manager = viewer_ ? viewer_->getWindowManager() : nullptr;
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         auto* vulkan_context = (vulkan_gui_ && window_manager) ? window_manager->getVulkanContext() : nullptr;
         if (vulkan_gui_ && !vulkan_context)
             return;
-#endif
 
         if (pending_cuda_warning_) {
             constexpr int MIN_MAJOR = lfs::core::MIN_CUDA_VERSION / 1000;
@@ -5116,7 +5082,6 @@ namespace lfs::vis::gui {
         }
 
         if (vulkan_gui_) {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
             guiFocusState().any_item_active |= ImGui::IsAnyItemActive() || rmlui_manager_.anyItemActive();
 
             const auto& bg = lfs::vis::theme().menu_background();
@@ -5186,9 +5151,6 @@ namespace lfs::vis::gui {
 
             persistImGuiSettingsIfNeeded();
             return;
-#else
-            return;
-#endif
         }
     }
 

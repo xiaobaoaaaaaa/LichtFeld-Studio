@@ -13,9 +13,7 @@
 #include <unordered_map>
 #include <vector>
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
 #include <vulkan/vulkan.h>
-#endif
 
 struct SDL_Window;
 class RenderInterface_VK;
@@ -73,7 +71,6 @@ namespace lfs::vis::gui {
                                 float clip_x2 = 0.0f,
                                 float clip_y2 = 0.0f);
         void clearVulkanQueue();
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         [[nodiscard]] bool beginVulkanFrame(VkCommandBuffer command_buffer,
                                             VkExtent2D extent,
                                             VkImage swapchain_image,
@@ -82,7 +79,6 @@ namespace lfs::vis::gui {
                                             std::size_t frame_slot);
         void renderQueuedVulkanContexts(bool foreground);
         void endVulkanFrame();
-#endif
 
         void beginFrameCursorTracking();
         void trackContextFrame(const Rml::Context* context, int window_x, int window_y);

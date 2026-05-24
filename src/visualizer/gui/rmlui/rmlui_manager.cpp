@@ -18,10 +18,8 @@
 #include "internal/resource_paths.hpp"
 #include "python/python_runtime.hpp"
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
 #include "gui/rmlui/rmlui_vk_backend.hpp"
 #include "window/vulkan_context.hpp"
-#endif
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementInstancer.h>
@@ -56,7 +54,6 @@ namespace lfs::vis::gui {
     }
 
     bool RmlUIManager::initVulkan(SDL_Window* window, lfs::vis::VulkanContext& vulkan_context, float dp_ratio) {
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         auto render_interface = std::make_unique<RenderInterface_VK>();
         RenderInterface_VK::ExternalContext context{};
         context.instance = vulkan_context.instance();
@@ -76,13 +73,6 @@ namespace lfs::vis::gui {
         }
 
         return initWithRenderInterface(window, dp_ratio, std::move(render_interface), vulkan_render_interface);
-#else
-        (void)window;
-        (void)vulkan_context;
-        (void)dp_ratio;
-        LOG_ERROR("RmlUI Vulkan initialization requested, but Vulkan viewer dependencies are disabled");
-        return false;
-#endif
     }
 
     bool RmlUIManager::initWithRenderInterface(SDL_Window* window,
@@ -109,10 +99,8 @@ namespace lfs::vis::gui {
 
         if (!Rml::Initialise()) {
             LOG_ERROR("Failed to initialize RmlUI");
-#ifdef LFS_VULKAN_VIEWER_ENABLED
             if (vulkan_render_interface_)
                 vulkan_render_interface_->ShutdownExternal();
-#endif
             owned_render_interface_.reset();
             vulkan_render_interface_ = nullptr;
             text_input_handler_.reset();
@@ -273,10 +261,8 @@ namespace lfs::vis::gui {
         if (Rml::GetTextInputHandler() == text_input_handler_.get())
             Rml::SetTextInputHandler(nullptr);
         Rml::Shutdown();
-#ifdef LFS_VULKAN_VIEWER_ENABLED
         if (vulkan_render_interface_)
             vulkan_render_interface_->ShutdownExternal();
-#endif
         owned_render_interface_.reset();
         vulkan_render_interface_ = nullptr;
         vulkan_queue_.clear();
@@ -451,7 +437,6 @@ namespace lfs::vis::gui {
         vulkan_foreground_queue_.clear();
     }
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
     bool RmlUIManager::beginVulkanFrame(const VkCommandBuffer command_buffer,
                                         const VkExtent2D extent,
                                         const VkImage swapchain_image,
@@ -504,6 +489,5 @@ namespace lfs::vis::gui {
         vulkan_render_interface_->EndExternalFrame();
         vulkan_frame_active_ = false;
     }
-#endif
 
 } // namespace lfs::vis::gui

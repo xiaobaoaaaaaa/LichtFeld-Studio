@@ -4,8 +4,6 @@
 
 #include "point_cloud_vulkan_renderer.hpp"
 
-#ifdef LFS_VULKAN_VIEWER_ENABLED
-
 #include "core/logger.hpp"
 
 #include <array>
@@ -1069,5 +1067,3 @@ namespace lfs::vis {
     }
 
 } // namespace lfs::vis
-
-#endif // LFS_VULKAN_VIEWER_ENABLED

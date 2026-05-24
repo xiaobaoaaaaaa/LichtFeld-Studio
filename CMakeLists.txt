@@ -129,8 +129,6 @@ file(WRITE "${CMAKE_BINARY_DIR}/include/git_version.h"
 # Setup
 get_filename_component(PROJ_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
 
-option(ENABLE_VULKAN_VIEWER "Resolve and link required Vulkan viewer dependencies" ON)
-set(ENABLE_VULKAN_VIEWER ON CACHE BOOL "Vulkan viewer dependencies are required" FORCE)
 option(BUILD_TESTS "Build tests" OFF)
 option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path test (no CUDA)" OFF)
 option(ENABLE_ALLOCATION_PROFILING "Enable tensor allocation profiling" OFF)
@@ -321,11 +319,9 @@ message(STATUS "CUDA Toolkit ${CUDAToolkit_VERSION} found at ${CUDAToolkit_TARGE
 # Find packages
 find_package(TBB REQUIRED)
 find_package(Threads REQUIRED)
-if(ENABLE_VULKAN_VIEWER)
-    find_package(Vulkan REQUIRED)
-    find_package(VulkanMemoryAllocator CONFIG REQUIRED)
-    find_package(volk CONFIG REQUIRED)
-endif()
+find_package(Vulkan REQUIRED)
+find_package(VulkanMemoryAllocator CONFIG REQUIRED)
+find_package(volk CONFIG REQUIRED)
 find_package(SDL3 REQUIRED)
 lfs_validate_linux_sdl_video_backends()
 find_package(glm REQUIRED)
@@ -353,12 +349,6 @@ target_compile_definitions(glm::glm INTERFACE GLM_FORCE_DEPTH_ZERO_TO_ONE)
 # use it here as the global default CUDA architecture list too
 if(LichtFeld-Studio_CUDA_ARCH)
     set(CMAKE_CUDA_ARCHITECTURES "${LichtFeld-Studio_CUDA_ARCH}" CACHE STRING "CUDA architectures" FORCE)
-endif()
-
-if(ENABLE_VULKAN_VIEWER)
-    set(LFS_VULKAN_VIEWER_ENABLED 1)
-else()
-    set(LFS_VULKAN_VIEWER_ENABLED 0)
 endif()
 
 # Create configuration header (static options)
@@ -476,30 +466,28 @@ target_link_libraries(${PROJECT_NAME}
         SDL3::SDL3
 )
 
-if(ENABLE_VULKAN_VIEWER)
-    target_link_libraries(${PROJECT_NAME}
-            PRIVATE
-            Vulkan::Vulkan
-            GPUOpen::VulkanMemoryAllocator
-            volk::volk_headers)
+target_link_libraries(${PROJECT_NAME}
+        PRIVATE
+        Vulkan::Vulkan
+        GPUOpen::VulkanMemoryAllocator
+        volk::volk_headers)
 
-    if(BUILD_PORTABLE AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        get_filename_component(_lfs_vulkan_loader_realpath "${Vulkan_LIBRARY}" REALPATH)
-        get_filename_component(_lfs_vulkan_loader_realname "${_lfs_vulkan_loader_realpath}" NAME)
-        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E make_directory
-                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib"
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${_lfs_vulkan_loader_realpath}"
-                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib/${_lfs_vulkan_loader_realname}"
-                COMMAND ${CMAKE_COMMAND} -E create_symlink
-                    "${_lfs_vulkan_loader_realname}"
-                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib/libvulkan.so.1"
-                COMMAND ${CMAKE_COMMAND} -E create_symlink
-                    "libvulkan.so.1"
-                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib/libvulkan.so"
-                COMMENT "Copying Vulkan loader to portable runtime directory")
-    endif()
+if(BUILD_PORTABLE AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    get_filename_component(_lfs_vulkan_loader_realpath "${Vulkan_LIBRARY}" REALPATH)
+    get_filename_component(_lfs_vulkan_loader_realname "${_lfs_vulkan_loader_realpath}" NAME)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_lfs_vulkan_loader_realpath}"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib/${_lfs_vulkan_loader_realname}"
+            COMMAND ${CMAKE_COMMAND} -E create_symlink
+                "${_lfs_vulkan_loader_realname}"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib/libvulkan.so.1"
+            COMMAND ${CMAKE_COMMAND} -E create_symlink
+                "libvulkan.so.1"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/lib/libvulkan.so"
+            COMMENT "Copying Vulkan loader to portable runtime directory")
 endif()
 
 # The app embeds Python and loads the nanobind module at runtime for panels,
@@ -679,7 +667,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMENT "Creating resource directory structure"
 )
 
-if(ENABLE_VULKAN_VIEWER AND TARGET lfs_vulkan_rasterizer)
+if(TARGET lfs_vulkan_rasterizer)
     get_target_property(_LFS_VULKAN_RASTERIZER_SPV_DIR
         lfs_vulkan_rasterizer
         LFS_VULKAN_RASTERIZER_SPV_DIR)
@@ -974,11 +962,8 @@ message(STATUS "===========================================")
 message(STATUS "Build Configuration:")
 message(STATUS "  CUDA Version: ${CUDAToolkit_VERSION}")
 message(STATUS "  CUDA Archs: ${CMAKE_CUDA_ARCHITECTURES}")
-message(STATUS "  Vulkan Viewer Dependencies: ${ENABLE_VULKAN_VIEWER}")
-if(ENABLE_VULKAN_VIEWER)
-    message(STATUS "  Vulkan Found: ${Vulkan_FOUND}")
-    message(STATUS "  Vulkan Include Dirs: ${Vulkan_INCLUDE_DIRS}")
-endif()
+message(STATUS "  Vulkan Found: ${Vulkan_FOUND}")
+message(STATUS "  Vulkan Include Dirs: ${Vulkan_INCLUDE_DIRS}")
 message(STATUS "  FreeType Found: ${FREETYPE_FOUND}")
 message(STATUS "  WebP Found: ${WebP_FOUND}")
 message(STATUS "  LibArchive Found: ${LibArchive_FOUND}")
@@ -1032,7 +1017,7 @@ install(TARGETS lfs_mcp
 install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" DESTINATION ".")
 
 set(INSTALL_RESOURCE_DIR "${CMAKE_INSTALL_DATADIR}/LichtFeld-Studio")
-if(ENABLE_VULKAN_VIEWER AND _LFS_VULKAN_RASTERIZER_SPV_DIR)
+if(_LFS_VULKAN_RASTERIZER_SPV_DIR)
     install(DIRECTORY "${_LFS_VULKAN_RASTERIZER_SPV_DIR}/"
             DESTINATION "${INSTALL_RESOURCE_DIR}/shaders/vulkan_rasterizer"
             FILES_MATCHING

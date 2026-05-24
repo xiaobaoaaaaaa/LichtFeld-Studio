@@ -4,10 +4,6 @@
 
 #pragma once
 
-#include "config.h"
-
-#ifdef LFS_VULKAN_VIEWER_ENABLED
-
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "rendering/rendering.hpp"
@@ -109,5 +105,3 @@ namespace lfs::vis {
     };
 
 } // namespace lfs::vis
-
-#endif // LFS_VULKAN_VIEWER_ENABLED
