@@ -146,12 +146,16 @@ class _UpdateHandleStub:
     def __init__(self):
         self.request_update_count = 0
         self.dirty_all_count = 0
+        self.records = {}
 
     def request_update(self):
         self.request_update_count += 1
 
     def dirty_all(self):
         self.dirty_all_count += 1
+
+    def update_record_list(self, name, items):
+        self.records[name] = list(items)
 
 
 def _translation_matrix(tx: float, ty: float, tz: float) -> list[list[float]]:
@@ -734,7 +738,7 @@ def test_histogram_ctrl_scroll_zooms_at_cursor_through_keymap(histogram_panel_mo
 
     # A refresh would re-bin against the new custom range; mirror that so the view the
     # next scroll reads from tracks the committed range.
-    def sync_view_from_custom_range():
+    def sync_view_from_custom_range(view_only=False):
         panel._primary_histogram_min = (
             panel._auto_histogram_min
             if panel._custom_range_min_value is None
@@ -1197,3 +1201,102 @@ def test_histogram_panel_can_toggle_between_bottom_dock_and_floating(histogram_p
     finally:
         lf.ui.get_panel = original_get_panel
         lf.ui.set_panel_space = original_set_panel_space
+
+
+# --- Snappiness / elite-UX regressions -------------------------------------------------
+
+def test_wheel_zoom_magnitude_scales_with_delta(histogram_panel_module):
+    f = histogram_panel_module.HistogramPanel._wheel_zoom_magnitude
+    assert f(1.0) == 1.0
+    assert f(-1.0) == 1.0
+    assert f(120.0) == 1.0           # one HID notch
+    assert f(5.0) == 1.0             # small per-notch systems stay single-step
+    assert f(600.0) == pytest.approx(5.0)   # 5-notch flick zooms 5x further
+    assert f(-100000.0) == 8.0       # clamped
+
+
+def test_approx_equal_uses_relative_tolerance(histogram_panel_module):
+    f = histogram_panel_module.HistogramPanel._approx_equal
+    assert f(1.0, 1.0)
+    assert f(1_000_000.0, 1_000_000.5)        # within 1e-6 relative
+    assert not f(1_000_000.0, 1_000_100.0)    # outside relative tolerance
+    assert f(0.0, 0.0)
+    assert not f(0.0, 1e-3)
+
+
+def test_cursor_zoom_magnitude_zooms_further(histogram_panel_module):
+    f = histogram_panel_module.HistogramPanel._cursor_zoom_bounds
+    one = f(0.0, 1.0, 0.5, 0.0, 1.0, zoom_in=True, magnitude=1.0)
+    five = f(0.0, 1.0, 0.5, 0.0, 1.0, zoom_in=True, magnitude=5.0)
+    assert one is not None and five is not None
+    assert (one[1] - one[0]) == pytest.approx(0.8)
+    assert (five[1] - five[0]) == pytest.approx(0.8 ** 5)
+    assert (five[1] - five[0]) < (one[1] - one[0])
+
+
+def test_refresh_view_only_reuses_cache_without_extracting(histogram_panel_module, lf, numpy, monkeypatch):
+    panel = histogram_panel_module.HistogramPanel()
+    panel._handle = _UpdateHandleStub()
+    data = numpy.array([0.1, 0.5, 0.9], dtype=numpy.float32)
+    panel._primary_valid_values = lf.Tensor.from_numpy(data)
+    panel._primary_finite_values_cpu = lf.Tensor.from_numpy(data)
+
+    calls = {"extract": 0, "rebind": 0}
+    monkeypatch.setattr(panel, "_extract_metric_values",
+                        lambda *a, **k: calls.__setitem__("extract", calls["extract"] + 1))
+    monkeypatch.setattr(panel, "_rebind_view_from_cache",
+                        lambda: calls.__setitem__("rebind", calls["rebind"] + 1))
+
+    panel._refresh(view_only=True)
+
+    assert calls["rebind"] == 1           # re-binned from cache
+    assert calls["extract"] == 0          # never re-extracted the scene
+    assert panel._handle.dirty_all_count == 1   # exactly one repaint
+
+
+def test_refresh_view_only_falls_back_when_cache_empty(histogram_panel_module, monkeypatch):
+    panel = histogram_panel_module.HistogramPanel()
+    panel._handle = _UpdateHandleStub()
+    panel._primary_finite_values_cpu = None
+    rebind = []
+    monkeypatch.setattr(panel, "_rebind_view_from_cache", lambda: rebind.append(1))
+    monkeypatch.setattr(histogram_panel_module.lf, "get_scene", lambda: None, raising=False)
+
+    panel._refresh(view_only=True)
+
+    assert rebind == []   # no cache -> falls through to the full (here: no-scene) path
+
+
+def test_chart_dblclick_fits_and_clears_custom_range(histogram_panel_module, monkeypatch):
+    panel = histogram_panel_module.HistogramPanel()
+    panel._handle = _UpdateHandleStub()
+    panel._show_chart = True
+    panel._custom_range_min_value = 0.2
+    panel._custom_range_max_value = 0.8
+    refreshed = []
+    monkeypatch.setattr(panel, "_refresh_range_preserving_mark", lambda: refreshed.append(1))
+
+    event = _MouseEventStub(mouse_x=0.0)
+    panel._on_chart_dblclick(event)
+
+    assert panel._custom_range_min_value is None
+    assert panel._custom_range_max_value is None
+    assert refreshed == [1]
+    assert event.stopped is True
+
+
+def test_mouseup_aborts_drag_when_scene_invalid(histogram_panel_module, monkeypatch):
+    panel = histogram_panel_module.HistogramPanel()
+    panel._handle = _UpdateHandleStub()
+    panel._dragging_mark = True
+    monkeypatch.setattr(histogram_panel_module.lf, "get_scene",
+                        lambda: SimpleNamespace(is_valid=lambda: False), raising=False)
+    reset = []
+    monkeypatch.setattr(panel, "_reset_marked_state", lambda clear_scene=False: reset.append(clear_scene))
+
+    event = _MouseEventStub(mouse_x=0.0)
+    panel._on_document_mouseup(event)
+
+    assert panel._dragging_mark is False
+    assert reset == [False]
+    assert event.stopped is True
