@@ -8,10 +8,12 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
+#include "io/loader.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/operation/undo_entry.hpp"
 #include "visualizer/operation/undo_history.hpp"
+#include "visualizer/rendering/vulkan_external_tensor.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/training/training_manager.hpp"
 #include "visualizer/training/training_state.hpp"
@@ -73,6 +75,7 @@ namespace lfs::python {
                             0.0f, 1.0f, "Flash effect intensity")
                 .build();
         }
+
     } // namespace
 
     // Helper to convert glm::mat4 to nb::tuple (row-major for NumPy compatibility)
@@ -383,6 +386,14 @@ namespace lfs::python {
             rotation.tensor().clone(),
             opacity.tensor().clone(),
             scene_scale);
+
+        if (auto allocator = vis::makeViewerSplatTensorAllocator()) {
+            if (auto migrated = io::migrateSplatTensorsToAllocator(*splat, allocator); !migrated) {
+                throw std::runtime_error("Failed to prepare splat tensors for rendering: " +
+                                         migrated.error().format());
+            }
+            scene_->setCombinedModelAllocator(std::move(allocator));
+        }
 
         const size_t gaussian_count = splat->size();
         const int32_t node_id = scene_->addSplat(name, std::move(splat), parent);
@@ -1299,12 +1310,14 @@ Returns:
             .def("get_node_bounds", &PyScene::get_node_bounds, nb::arg("id"), "Get axis-aligned bounding box as ((min_x, min_y, min_z), (max_x, max_y, max_z))")
             .def("get_node_bounds_center", &PyScene::get_node_bounds_center, nb::arg("id"), "Get center of the node bounding box as (x, y, z)")
             // Bounds (by name)
-            .def("get_node_bounds", [](PyScene& self, const std::string& name) {
+            .def(
+                "get_node_bounds", [](PyScene& self, const std::string& name) {
                     auto node = self.get_node(name);
                     if (!node)
                         return decltype(self.get_node_bounds(0)){std::nullopt};
                     return self.get_node_bounds(node->id()); }, nb::arg("name"), "Get axis-aligned bounding box by node name")
-            .def("get_node_bounds_center", [](PyScene& self, const std::string& name) {
+            .def(
+                "get_node_bounds_center", [](PyScene& self, const std::string& name) {
                     auto node = self.get_node(name);
                     if (!node)
                         throw std::runtime_error("Node not found: " + name);
