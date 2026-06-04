@@ -2157,6 +2157,18 @@ def reveal_in_file_manager(path: str) -> bool:
 def apply_cropbox() -> None:
     """Apply the selected cropbox"""
 
+def set_crop_tool_shape(shape: str) -> None:
+    """Set the active crop tool shape: box or ellipsoid"""
+
+def get_crop_tool_shape() -> str:
+    """Get the active crop tool shape"""
+
+def apply_crop_tool() -> None:
+    """Apply the active crop tool primitive"""
+
+def fit_crop_tool(use_percentile: bool = False) -> None:
+    """Fit the active crop tool primitive to the selected node"""
+
 def fit_cropbox_to_scene(use_percentile: bool = False) -> None:
     """Fit cropbox to scene bounds"""
 

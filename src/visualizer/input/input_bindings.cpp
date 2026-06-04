@@ -26,7 +26,7 @@ namespace lfs::vis::input {
 
     namespace {
 
-        constexpr int PROFILE_VERSION = 14; // Version 14 adds histogram marked-range zoom.
+        constexpr int PROFILE_VERSION = 15; // Version 15 adds crop apply Enter bindings.
         constexpr std::array<ToolMode, 8> ALL_MODES = {
             ToolMode::GLOBAL,
             ToolMode::SELECTION,
@@ -480,6 +480,11 @@ namespace lfs::vis::input {
                 def.action == Action::BRUSH_RESIZE &&
                 std::holds_alternative<MouseScrollTrigger>(def.trigger) &&
                 std::get<MouseScrollTrigger>(def.trigger).modifiers == MODIFIER_SHIFT;
+            const auto* key_trigger = std::get_if<KeyTrigger>(&def.trigger);
+            const bool crop_apply_num_enter =
+                def.action == Action::APPLY_CROP_BOX &&
+                key_trigger &&
+                key_trigger->key == KEY_KP_ENTER;
             const bool should_add =
                 (version < 6 && def.action == Action::CAMERA_ROLL) ||
                 (version < 7 && def.action == Action::BRUSH_RESIZE && !brush_resize_shift_scroll) ||
@@ -487,11 +492,12 @@ namespace lfs::vis::input {
                 (version < 10 && def.action == Action::UNDO_POLYGON_VERTEX) ||
                 (version < 12 && brush_resize_shift_scroll) ||
                 (version < 13 && def.action == Action::CAMERA_SET_HOME) ||
-                (version < 14 && def.action == Action::HISTOGRAM_ZOOM_MARKED);
+                (version < 14 && def.action == Action::HISTOGRAM_ZOOM_MARKED) ||
+                (version < 15 && def.action == Action::APPLY_CROP_BOX);
             if (!should_add) {
                 continue;
             }
-            if (!brush_resize_shift_scroll) {
+            if (!brush_resize_shift_scroll && !crop_apply_num_enter) {
                 const bool action_already_bound = std::ranges::any_of(
                     bindings_, [&](const Binding& current) {
                         return current.mode == def.mode && current.action == def.action;
@@ -1054,6 +1060,10 @@ namespace lfs::vis::input {
                                     "Brush mode"});
         profile.bindings.push_back({ToolMode::CROP_BOX,
                                     KeyTrigger{KEY_ENTER, MODIFIER_NONE},
+                                    Action::APPLY_CROP_BOX,
+                                    "Apply/confirm"});
+        profile.bindings.push_back({ToolMode::CROP_BOX,
+                                    KeyTrigger{KEY_KP_ENTER, MODIFIER_NONE},
                                     Action::APPLY_CROP_BOX,
                                     "Apply/confirm"});
 

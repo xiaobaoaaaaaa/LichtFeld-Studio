@@ -141,6 +141,7 @@ class _GizmoToolbarController:
         "builtin.scale": "toolbar.scale",
         "builtin.mirror": "toolbar.mirror",
         "builtin.brush": "toolbar.painting",
+        "builtin.cropbox": "toolbar.crop_box",
         "builtin.align": "toolbar.align_3point",
     }
 
@@ -188,9 +189,12 @@ class _GizmoToolbarController:
 
     _TRANSFORM_TOOL_IDS = {"builtin.translate", "builtin.rotate", "builtin.scale"}
     _MIRROR_TOOL_ID = "builtin.mirror"
-    _HORIZONTAL_TOOL_IDS = {"builtin.select", _MIRROR_TOOL_ID, *_TRANSFORM_TOOL_IDS}
+    _CROP_TOOL_ID = "builtin.cropbox"
+    _HORIZONTAL_TOOL_IDS = {"builtin.select", _MIRROR_TOOL_ID, _CROP_TOOL_ID, *_TRANSFORM_TOOL_IDS}
     _TRANSFORM_SPACE_IDS = {"local": 0, "world": 1}
     _PIVOT_IDS = {"origin": 0, "bounds": 1}
+    _CROP_OBJECT_SHAPES = ("box", "ellipsoid")
+    _CROP_TRANSFORM_GIZMOS = ("translate", "rotate", "scale")
 
     def __init__(self):
         self.reset()
@@ -211,6 +215,7 @@ class _GizmoToolbarController:
                 "show_selection_toolbar": False,
                 "show_transform_toolbar": False,
                 "show_mirror_toolbar": False,
+                "show_crop_toolbar": False,
                 "show_transform_space_controls": False,
                 "show_transform_pivot_controls": False,
                 "selection_group_buttons": [],
@@ -218,6 +223,10 @@ class _GizmoToolbarController:
                 "transform_group_buttons": [],
                 "transform_tool_buttons": [],
                 "mirror_group_buttons": [],
+                "crop_group_buttons": [],
+                "crop_object_buttons": [],
+                "crop_transform_buttons": [],
+                "crop_action_buttons": [],
                 "gizmo_buttons": [],
                 "submode_buttons": [],
                 "pivot_buttons": [],
@@ -235,6 +244,7 @@ class _GizmoToolbarController:
         tool_def = ToolRegistry.get(active_tool_id) if active_tool_id else None
         select_tool_def = ToolRegistry.get("builtin.select")
         mirror_tool_def = ToolRegistry.get(self._MIRROR_TOOL_ID)
+        crop_tool_def = ToolRegistry.get(self._CROP_TOOL_ID)
 
         transform_tool_defs = [
             tool_def_item
@@ -247,6 +257,7 @@ class _GizmoToolbarController:
             if (
                 tool_def_item.id != "builtin.select" and
                 tool_def_item.id != self._MIRROR_TOOL_ID and
+                tool_def_item.id != self._CROP_TOOL_ID and
                 tool_def_item.id not in self._TRANSFORM_TOOL_IDS
             )
         ]
@@ -261,6 +272,10 @@ class _GizmoToolbarController:
             context,
         )
         mirror_group_buttons = self._build_mirror_records(mirror_tool_def, active_tool_id, context)
+        crop_group_buttons = self._build_crop_group_records(crop_tool_def, active_tool_id, context)
+        crop_object_buttons = self._build_crop_object_records(active_tool_id)
+        crop_transform_buttons = self._build_crop_transform_records(active_tool_id)
+        crop_action_buttons = self._build_crop_action_records(active_tool_id)
         submode_buttons = self._build_submode_records(active_tool_id, tool_def)
         pivot_buttons = self._build_pivot_records(tool_def)
 
@@ -274,6 +289,7 @@ class _GizmoToolbarController:
                 bool(transform_tool_buttons)
             ),
             "show_mirror_toolbar": active_tool_id == self._MIRROR_TOOL_ID and bool(submode_buttons),
+            "show_crop_toolbar": active_tool_id == self._CROP_TOOL_ID and bool(crop_object_buttons),
             "show_transform_space_controls": active_tool_id in self._TRANSFORM_TOOL_IDS and bool(submode_buttons),
             "show_transform_pivot_controls": active_tool_id in self._TRANSFORM_TOOL_IDS and bool(pivot_buttons),
             "selection_group_buttons": selection_group_buttons,
@@ -281,6 +297,10 @@ class _GizmoToolbarController:
             "transform_group_buttons": transform_group_buttons,
             "transform_tool_buttons": transform_tool_buttons,
             "mirror_group_buttons": mirror_group_buttons,
+            "crop_group_buttons": crop_group_buttons,
+            "crop_object_buttons": crop_object_buttons,
+            "crop_transform_buttons": crop_transform_buttons,
+            "crop_action_buttons": crop_action_buttons,
             "gizmo_buttons": gizmo_buttons,
             "submode_buttons": submode_buttons,
             "pivot_buttons": pivot_buttons,
@@ -394,6 +414,115 @@ class _GizmoToolbarController:
             )
         ]
 
+    def _build_crop_group_records(self, tool_def, active_tool_id, context):
+        if tool_def is None:
+            return []
+        return [
+            _button_record(
+                "group-crop",
+                "tool",
+                self._CROP_TOOL_ID,
+                _tool_icon_src(tool_def),
+                tooltip_key=self._TOOL_LOCALE_KEYS.get(self._CROP_TOOL_ID, ""),
+                tooltip_text=tool_def.label,
+                selected=active_tool_id == self._CROP_TOOL_ID,
+                enabled=tool_def.can_activate(context),
+            )
+        ]
+
+    def _build_crop_object_records(self, active_tool_id):
+        active = active_tool_id == self._CROP_TOOL_ID
+        active_shape = self._active_crop_shape() if active else "box"
+        return [
+            _button_record(
+                "crop-object-box",
+                "crop_object",
+                "box",
+                _icon_src("cropbox"),
+                tooltip_key="toolbar.crop_box",
+                tooltip_text="Crop Box",
+                selected=active and active_shape == "box",
+                enabled=active,
+            ),
+            _button_record(
+                "crop-object-ellipsoid",
+                "crop_object",
+                "ellipsoid",
+                _icon_src("sphere"),
+                tooltip_key="toolbar.ellipsoid",
+                tooltip_text="Ellipsoid",
+                selected=active and active_shape == "ellipsoid",
+                enabled=active,
+            ),
+        ]
+
+    def _build_crop_transform_records(self, active_tool_id):
+        import lichtfeld as lf
+
+        active = active_tool_id == self._CROP_TOOL_ID
+        active_gizmo = lf.ui.get_gizmo_type() if active and hasattr(lf.ui, "get_gizmo_type") else ""
+        if active and not active_gizmo:
+            active_gizmo = "translate"
+        specs = (
+            ("translate", "translation", "toolbar.translate", "Translate"),
+            ("rotate", "rotation", "toolbar.rotate", "Rotate"),
+            ("scale", "bounds", "toolbar.scale", "Bounds"),
+        )
+        return [
+            _button_record(
+                f"crop-transform-{mode}",
+                "crop_transform",
+                mode,
+                _icon_src(icon),
+                tooltip_key=tooltip_key,
+                tooltip_text=label,
+                selected=active and active_gizmo == mode,
+                enabled=active,
+            )
+            for mode, icon, tooltip_key, label in specs
+        ]
+
+    def _build_crop_action_records(self, active_tool_id):
+        active = active_tool_id == self._CROP_TOOL_ID
+        return [
+            _button_record(
+                "crop-trim",
+                "crop_trim",
+                "",
+                _icon_src("arrows-minimize"),
+                tooltip_key="scene.fit_to_scene_trimmed",
+                tooltip_text="Fit to Scene (Trimmed)",
+                enabled=active,
+            ),
+            _button_record(
+                "crop-apply",
+                "crop_apply",
+                "",
+                _icon_src("check"),
+                tooltip_key="common.apply",
+                tooltip_text="Apply",
+                enabled=active,
+            )
+        ]
+
+    def _active_crop_shape(self):
+        try:
+            import lichtfeld as lf
+
+            get_shape = getattr(lf.ui, "get_crop_tool_shape", None)
+            if callable(get_shape):
+                shape = get_shape()
+                if shape in self._CROP_OBJECT_SHAPES:
+                    return shape
+        except Exception:
+            pass
+        return "box"
+
+    def _activate_crop_tool(self, gizmo_type="translate"):
+        import lichtfeld as lf
+
+        lf.ui.set_active_operator(self._CROP_TOOL_ID, gizmo_type)
+
     def _build_submode_records(self, active_tool_id, tool_def):
         import lichtfeld as lf
 
@@ -487,6 +616,32 @@ class _GizmoToolbarController:
                 ToolRegistry.clear_active()
             else:
                 ToolRegistry.set_active(value)
+            return
+
+        if action == "crop_object":
+            if value in self._CROP_OBJECT_SHAPES:
+                current_gizmo = lf.ui.get_gizmo_type() if hasattr(lf.ui, "get_gizmo_type") else ""
+                set_shape = getattr(lf.ui, "set_crop_tool_shape", None)
+                if callable(set_shape):
+                    set_shape(value)
+                self._activate_crop_tool(current_gizmo or "translate")
+            return
+
+        if action == "crop_transform":
+            if value in self._CROP_TRANSFORM_GIZMOS:
+                self._activate_crop_tool(value)
+            return
+
+        if action == "crop_trim":
+            fit_crop = getattr(lf.ui, "fit_crop_tool", None)
+            if callable(fit_crop):
+                fit_crop(True)
+            return
+
+        if action == "crop_apply":
+            apply_crop = getattr(lf.ui, "apply_crop_tool", None)
+            if callable(apply_crop):
+                apply_crop()
             return
 
         if action == "submode":
@@ -856,6 +1011,7 @@ class _ViewportToolbarController:
         "show_selection_toolbar",
         "show_transform_toolbar",
         "show_mirror_toolbar",
+        "show_crop_toolbar",
         "show_transform_space_controls",
         "show_transform_pivot_controls",
     )
@@ -872,6 +1028,10 @@ class _ViewportToolbarController:
         "transform_group_buttons",
         "transform_tool_buttons",
         "mirror_group_buttons",
+        "crop_group_buttons",
+        "crop_object_buttons",
+        "crop_transform_buttons",
+        "crop_action_buttons",
         "gizmo_buttons",
         "submode_buttons",
         "pivot_buttons",
@@ -896,6 +1056,7 @@ class _ViewportToolbarController:
         self._show_selection_toolbar = False
         self._show_transform_toolbar = False
         self._show_mirror_toolbar = False
+        self._show_crop_toolbar = False
         self._show_transform_space_controls = False
         self._show_transform_pivot_controls = False
         self._gizmo.reset()
@@ -995,6 +1156,7 @@ class _ViewportToolbarController:
         dirty |= self._sync_flag("show_selection_toolbar", gizmo_state["show_selection_toolbar"] and not show_render_toolbar)
         dirty |= self._sync_flag("show_transform_toolbar", gizmo_state["show_transform_toolbar"] and not show_render_toolbar)
         dirty |= self._sync_flag("show_mirror_toolbar", gizmo_state["show_mirror_toolbar"] and not show_render_toolbar)
+        dirty |= self._sync_flag("show_crop_toolbar", gizmo_state["show_crop_toolbar"] and not show_render_toolbar)
         dirty |= self._sync_flag(
             "show_transform_space_controls",
             gizmo_state["show_transform_space_controls"] and not show_render_toolbar,
@@ -1016,6 +1178,10 @@ class _ViewportToolbarController:
         dirty |= self._sync_records("transform_group_buttons", gizmo_state["transform_group_buttons"])
         dirty |= self._sync_records("transform_tool_buttons", gizmo_state["transform_tool_buttons"])
         dirty |= self._sync_records("mirror_group_buttons", gizmo_state["mirror_group_buttons"])
+        dirty |= self._sync_records("crop_group_buttons", gizmo_state["crop_group_buttons"])
+        dirty |= self._sync_records("crop_object_buttons", gizmo_state["crop_object_buttons"])
+        dirty |= self._sync_records("crop_transform_buttons", gizmo_state["crop_transform_buttons"])
+        dirty |= self._sync_records("crop_action_buttons", gizmo_state["crop_action_buttons"])
         dirty |= self._sync_records("gizmo_buttons", gizmo_state["gizmo_buttons"])
         dirty |= self._sync_records("submode_buttons", gizmo_state["submode_buttons"])
         dirty |= self._sync_records("pivot_buttons", gizmo_state["pivot_buttons"])
@@ -1109,6 +1275,8 @@ class _ViewportToolbarController:
         if active_submode is _MISSING:
             active_submode = call("", getattr(lf.ui, "get_active_submode", None))
         active_submode = active_submode or ""
+        gizmo_type = call("", getattr(lf.ui, "get_gizmo_type", None))
+        crop_shape = call("box", getattr(lf.ui, "get_crop_tool_shape", None))
         transform_space = _native_store_value("transform_space", _MISSING)
         if transform_space is _MISSING:
             transform_space = call(1, getattr(lf.ui, "get_transform_space", None))
@@ -1157,6 +1325,8 @@ class _ViewportToolbarController:
             self._utility.active_group,
             active_tool,
             active_submode,
+            gizmo_type,
+            crop_shape,
             transform_space,
             pivot_mode,
             has_scene,
@@ -1183,7 +1353,16 @@ class _ViewportToolbarController:
             return
         action = str(args[0])
         value = str(args[1]) if len(args) > 1 else ""
-        if action in {"tool", "submode", "pivot", "selection_mode"}:
+        if action in {
+            "tool",
+            "submode",
+            "pivot",
+            "selection_mode",
+            "crop_object",
+            "crop_transform",
+            "crop_trim",
+            "crop_apply",
+        }:
             self._utility.close_group()
             self._gizmo.dispatch(action, value)
         else:

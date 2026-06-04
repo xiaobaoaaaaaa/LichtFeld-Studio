@@ -704,6 +704,55 @@ namespace lfs::vis {
                     input::TRIGGER_KIND_MOUSE_SCROLL);
     }
 
+    TEST_F(InputControllerFocusTest, CropApplyDefaultsToEnterAndNumEnter) {
+        input::InputBindings bindings;
+
+        EXPECT_EQ(bindings.getActionForKey(input::ToolMode::CROP_BOX,
+                                           input::KEY_ENTER,
+                                           input::MODIFIER_NONE),
+                  input::Action::APPLY_CROP_BOX);
+        EXPECT_EQ(bindings.getActionForKey(input::ToolMode::CROP_BOX,
+                                           input::KEY_KP_ENTER,
+                                           input::MODIFIER_NONE),
+                  input::Action::APPLY_CROP_BOX);
+    }
+
+    TEST_F(InputControllerFocusTest, VersionFourteenProfileMigratesCropApplyEnterBindings) {
+        const auto profile_path = std::filesystem::temp_directory_path() / "lfs_input_bindings_legacy_v14.json";
+        std::filesystem::remove(profile_path);
+        {
+            std::ofstream file(profile_path);
+            ASSERT_TRUE(file.is_open());
+            file << R"({
+  "name": "LegacyV14",
+  "version": 14,
+  "bindings": [
+    {
+      "mode": 0,
+      "action": 71,
+      "description": "Zoom Histogram at Cursor",
+      "trigger_type": "scroll",
+      "modifiers": 2
+    }
+  ]
+})";
+        }
+
+        input::InputBindings loaded;
+        ASSERT_TRUE(loaded.loadProfileFromFile(profile_path));
+
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::CROP_BOX,
+                                         input::KEY_ENTER,
+                                         input::MODIFIER_NONE),
+                  input::Action::APPLY_CROP_BOX);
+        EXPECT_EQ(loaded.getActionForKey(input::ToolMode::CROP_BOX,
+                                         input::KEY_KP_ENTER,
+                                         input::MODIFIER_NONE),
+                  input::Action::APPLY_CROP_BOX);
+
+        std::filesystem::remove(profile_path);
+    }
+
     TEST_F(InputControllerFocusTest, LegacyProfileMigrationAddsOnlyVersionedModalDefaults) {
         const auto profile_path = std::filesystem::temp_directory_path() / "lfs_input_bindings_legacy_v5.json";
         std::filesystem::remove(profile_path);

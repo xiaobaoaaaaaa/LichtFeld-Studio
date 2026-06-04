@@ -2198,6 +2198,23 @@ namespace lfs::vis::gui {
                                    4.5f);
             }
 
+            if (gizmo.cropbox_active) {
+                appendProjectedBox(params.overlay_triangles, params, panel, settings,
+                                   gizmo.cropbox_min,
+                                   gizmo.cropbox_max,
+                                   gizmo.cropbox_transform,
+                                   cropGuideColor(glm::vec3(1.0f, 1.0f, 0.0f), false, 0.0f),
+                                   2.0f);
+            }
+
+            if (gizmo.ellipsoid_active) {
+                appendProjectedEllipsoid(params.overlay_triangles, params, panel, settings,
+                                         gizmo.ellipsoid_radii,
+                                         gizmo.ellipsoid_transform,
+                                         cropGuideColor(glm::vec3(0.5f, 0.85f, 1.0f), false, 0.0f),
+                                         2.0f);
+            }
+
             if (!scene_state || !scene_manager) {
                 return;
             }

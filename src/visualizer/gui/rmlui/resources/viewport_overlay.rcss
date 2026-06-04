@@ -463,6 +463,12 @@ body {
     margin: 8dp 0 7dp;
 }
 
+.toolbar-hcenter .toolbar-separator {
+    width: 1dp;
+    height: 24dp;
+    margin: 4dp 5dp;
+}
+
 .viewport-status-overlay {
     position: absolute;
     left: 0;

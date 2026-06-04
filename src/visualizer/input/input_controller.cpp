@@ -2835,6 +2835,8 @@ namespace lfs::vis {
     }
 
     input::ToolMode InputController::getCurrentToolMode() const {
+        if (UnifiedToolRegistry::instance().getActiveTool() == "builtin.cropbox")
+            return input::ToolMode::CROP_BOX;
         if (selection_tool_ && selection_tool_->isEnabled())
             return input::ToolMode::SELECTION;
         if (brush_tool_ && brush_tool_->isEnabled())

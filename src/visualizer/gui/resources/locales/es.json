@@ -46,6 +46,12 @@
     "preferences": "Preferencias",
     "histogram": "Histogram"
   },
+  "common": {
+    "apply": "Aplicar"
+  },
+  "scene": {
+    "fit_to_scene_trimmed": "Ajustar a la escena (recortado)"
+  },
   "toolbar": {
     "selection": "Selección",
     "translate": "Trasladar",
@@ -54,6 +60,8 @@
     "mirror": "Espejar",
     "painting": "Pintura",
     "align_3point": "Alineación de 3 puntos",
+    "crop_box": "Caja de recorte",
+    "ellipsoid": "Elipsoide",
     "brush_selection": "Selección con pincel",
     "rect_selection": "Selección rectangular",
     "polygon_selection": "Selección poligonal",

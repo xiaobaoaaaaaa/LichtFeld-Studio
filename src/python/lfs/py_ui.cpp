@@ -38,6 +38,7 @@
 #include "rendering/render_constants.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/editor_context.hpp"
+#include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_context.hpp"
@@ -4428,6 +4429,45 @@ namespace lfs::python {
             "apply_cropbox",
             []() { lfs::core::events::cmd::ApplyCropBox{}.emit(); },
             "Apply the selected cropbox");
+
+        m.def(
+            "set_crop_tool_shape",
+            [](const std::string& shape) {
+                if (auto* const gui = lfs::python::get_gui_manager()) {
+                    gui->gizmo().setCropToolShape(shape);
+                }
+            },
+            nb::arg("shape"),
+            "Set the active crop tool shape: box or ellipsoid");
+
+        m.def(
+            "get_crop_tool_shape",
+            []() -> std::string {
+                if (auto* const gui = lfs::python::get_gui_manager()) {
+                    return gui->gizmo().cropToolShape();
+                }
+                return "box";
+            },
+            "Get the active crop tool shape");
+
+        m.def(
+            "apply_crop_tool",
+            []() {
+                if (auto* const gui = lfs::python::get_gui_manager()) {
+                    gui->gizmo().applyActiveCropTool();
+                }
+            },
+            "Apply the active crop tool primitive");
+
+        m.def(
+            "fit_crop_tool",
+            [](bool use_percentile) {
+                if (auto* const gui = lfs::python::get_gui_manager()) {
+                    gui->gizmo().fitActiveCropTool(use_percentile);
+                }
+            },
+            nb::arg("use_percentile") = false,
+            "Fit the active crop tool primitive to the selected node");
 
         m.def(
             "fit_cropbox_to_scene",
