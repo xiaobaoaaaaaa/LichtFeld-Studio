@@ -132,9 +132,6 @@ namespace lfs::vis {
         const bool selection_overlay_enabled = !ctx.training_active;
         const bool overlay_visible =
             selection_overlay_enabled && panelMatches(ctx.cursor_preview.panel, render_panel);
-        const float depth_view_max = ctx.settings.depth_clip_far > frame_view.near_plane
-                                         ? ctx.settings.depth_clip_far
-                                         : frame_view.far_plane;
 
         lfs::rendering::ViewportRenderRequest request{
             .frame_view = frame_view,
@@ -184,8 +181,9 @@ namespace lfs::vis {
                                                  : -1}},
             .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(ctx.settings),
             .depth_view = ctx.settings.depth_view,
-            .depth_view_min = frame_view.near_plane,
-            .depth_view_max = depth_view_max};
+            .depth_view_min = ctx.settings.depth_view_min,
+            .depth_view_max = ctx.settings.depth_view_max,
+            .depth_visualization_mode = ctx.settings.depth_visualization_mode};
 
         if (selection_overlay_enabled ||
             request.overlay.markers.show_rings ||

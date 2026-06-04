@@ -41,6 +41,7 @@ namespace lfs::vis {
             kFlagHasSelection = 1 << 5,
             kFlagHasPreviewSelection = 1 << 6,
             kFlagPreviewSelectionAdditive = 1 << 7,
+            kFlagDepthViewGrayscale = 1 << 8,
         };
         struct PushConstants {
             float view_proj[16];        // 64
@@ -226,6 +227,9 @@ namespace lfs::vis {
                 if (req.preview_selection_additive) {
                     flags |= kFlagPreviewSelectionAdditive;
                 }
+            }
+            if (req.depth_visualization_mode == lfs::rendering::DepthVisualizationMode::Grayscale) {
+                flags |= kFlagDepthViewGrayscale;
             }
             pc.counts[0] = n_transforms;
             pc.counts[1] = n_visibility;

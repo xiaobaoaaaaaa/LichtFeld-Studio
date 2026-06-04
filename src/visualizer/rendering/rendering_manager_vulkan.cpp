@@ -1322,10 +1322,9 @@ namespace lfs::vis {
                 vk_req.voxel_size = pc_request.render.voxel_size;
                 vk_req.scaling_modifier = pc_request.render.scaling_modifier;
                 vk_req.depth_view = settings_.depth_view;
-                vk_req.depth_view_min = pc_request.frame_view.near_plane;
-                vk_req.depth_view_max = settings_.depth_clip_far > pc_request.frame_view.near_plane
-                                            ? settings_.depth_clip_far
-                                            : pc_request.frame_view.far_plane;
+                vk_req.depth_view_min = settings_.depth_view_min;
+                vk_req.depth_view_max = settings_.depth_view_max;
+                vk_req.depth_visualization_mode = settings_.depth_visualization_mode;
 
                 LOG_TIMER("renderVulkanFrame.point_cloud_vulkan");
                 auto render_result = point_cloud_vulkan_renderer_->render(

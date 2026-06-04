@@ -387,6 +387,7 @@ namespace lfs::vis::gui {
         document_sync_subscriptions_.push_back(store.active_submode.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.transform_space.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.pivot_mode.subscribe(mark_document_dirty));
+        document_sync_subscriptions_.push_back(store.render_settings_generation.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.import_overlay_state.subscribe(mark_document_dirty));
         document_sync_subscriptions_.push_back(store.video_export_overlay_state.subscribe(mark_document_dirty));
     }
@@ -494,9 +495,6 @@ namespace lfs::vis::gui {
                                             static_cast<int>(vp_pos_.y - screen_origin_.y));
         }
 
-        if (guiFocusState().want_capture_mouse)
-            return;
-
         const float mx = input.mouse_x - vp_pos_.x;
         const float my = input.mouse_y - vp_pos_.y;
         const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
@@ -530,8 +528,11 @@ namespace lfs::vis::gui {
         if (mouse_pos_valid_ && !mouse_moved && !pointer_event && !pointer_drag &&
             !keyboard_event && !vram_drag_capture) {
             wants_input_ = hovered_interactive_ || focused_text_target;
-            if (hovered_interactive_)
+            if (hovered_interactive_) {
                 guiFocusState().want_capture_mouse = true;
+                if (auto* const hover = rml_context_->GetHoverElement())
+                    tooltip_.setHover(resolveRmlTooltip(hover), hover);
+            }
             if (focused_text_target)
                 guiFocusState().want_capture_keyboard = true;
             return;

@@ -222,6 +222,7 @@ namespace lfs::vis {
                                                  settings_.raster_backend, settings_.gut);
             settings_.gut = lfs::rendering::isGutBackend(settings_.raster_backend);
             enforceProjectionBackend(settings_);
+            sanitizeDepthViewSettings(settings_);
             settings_.grid_plane = clampGridPlane(settings_.grid_plane);
             if (split_view_service_.isIndependentDualActive(settings_)) {
                 if (grid_plane_changed) {
@@ -232,6 +233,9 @@ namespace lfs::vis {
             }
             markDirty(dirty_flags);
         }
+
+        auto& render_settings_generation = app_store().render_settings_generation;
+        render_settings_generation.set(render_settings_generation.get() + 1);
 
         if (clear_metrics) {
             invalidateCameraMetricsRequests(true);

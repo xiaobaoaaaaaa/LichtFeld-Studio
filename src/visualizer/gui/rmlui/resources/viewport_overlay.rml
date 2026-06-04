@@ -559,6 +559,70 @@
         </div>
     </div>
 
+    <div id="depth-view-block" class="viewport-depth-overlay hidden">
+        <div class="viewport-transform-panel viewport-depth-panel" data-tooltip="tooltip.depth_view_panel">
+            <div class="viewport-transform-header viewport-depth-header">
+                <div class="viewport-transform-meta viewport-depth-meta">
+                    <span class="viewport-transform-meta__tool" data-tooltip="tooltip.depth_view_tool">{{depth_view_tool_label}}</span>
+                    <select class="viewport-depth-mode-select"
+                            data-value="depth_view_mode_value"
+                            data-tooltip="tooltip.depth_view_mode"
+                            data-attrif-disabled="!depth_view_has_scene">
+                        <option value="palette">Color</option>
+                        <option value="gray">Gray</option>
+                    </select>
+                </div>
+
+                <div class="viewport-selection-depth-fields viewport-depth-fields" data-tooltip="tooltip.depth_view_range">
+                    <div class="viewport-transform-axis viewport-selection-depth-axis viewport-depth-axis" data-tooltip="tooltip.depth_view_near">
+                        <span class="viewport-transform-axis-label">Near</span>
+                        <input type="range"
+                               class="setting-slider viewport-selection-slider viewport-depth-slider"
+                               min="0"
+                               max="10000"
+                               data-attr-min="depth_view_near_slider_min"
+                               data-attr-max="depth_view_near_slider_max"
+                               step="0.05"
+                               data-value="depth_view_near_value"
+                               data-attrif-disabled="!depth_view_has_scene" />
+                        <input type="text"
+                               class="number-input viewport-selection-depth-input viewport-depth-input"
+                               id="depth-view-near"
+                               data-value="depth_view_near_str"
+                               data-attrif-disabled="!depth_view_has_scene" />
+                    </div>
+                    <div class="viewport-transform-axis viewport-selection-depth-axis viewport-depth-axis" data-tooltip="tooltip.depth_view_far">
+                        <span class="viewport-transform-axis-label">Far</span>
+                        <input type="range"
+                               class="setting-slider viewport-selection-slider viewport-depth-slider"
+                               min="0"
+                               max="10000"
+                               data-attr-min="depth_view_far_slider_min"
+                               data-attr-max="depth_view_far_slider_max"
+                               step="0.05"
+                               data-value="depth_view_far_value"
+                               data-attrif-disabled="!depth_view_has_scene" />
+                        <input type="text"
+                               class="number-input viewport-selection-depth-input viewport-depth-input"
+                               id="depth-view-far"
+                               data-value="depth_view_far_str"
+                               data-attrif-disabled="!depth_view_has_scene" />
+                    </div>
+                </div>
+
+                <div class="viewport-transform-actions viewport-depth-actions">
+                    <button class="icon-btn viewport-transform-action"
+                            data-tooltip="tooltip.depth_view_close"
+                            data-action="toggle_depth_view"
+                            data-attr-title="depth_view_disable_label"
+                            data-event-click="depth_view_action('disable')">
+                        <img src="../icon/scene/x.png" />
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="transform-block" class="viewport-transform-overlay hidden">
         <div class="viewport-transform-panel" data-tooltip="tooltip.transform_panel">
             <div class="viewport-transform-header">

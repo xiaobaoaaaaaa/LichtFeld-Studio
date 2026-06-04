@@ -102,6 +102,17 @@ body {
     z-index: 9;
 }
 
+.viewport-depth-overlay {
+    position: absolute;
+    top: 5dp;
+    left: 52dp;
+    right: 12dp;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 9;
+}
+
 .viewport-transform-overlay {
     position: absolute;
     top: 127dp;
@@ -117,10 +128,40 @@ body {
     flex-wrap: wrap;
 }
 
+.viewport-depth-header {
+    flex-wrap: nowrap;
+}
+
 .viewport-transform-meta.viewport-selection-meta {
     min-width: 88dp;
     max-width: 128dp;
     flex-grow: 0;
+}
+
+.viewport-transform-meta.viewport-depth-meta {
+    min-width: 0;
+    max-width: none;
+    flex-direction: row;
+    align-items: center;
+    gap: 6dp;
+    flex-grow: 0;
+    flex-shrink: 0;
+}
+
+.viewport-transform-meta.viewport-depth-meta .viewport-transform-meta__tool {
+    line-height: 24dp;
+    white-space: nowrap;
+}
+
+.viewport-depth-mode-select {
+    width: 112dp;
+    min-width: 112dp;
+    height: 24dp;
+    min-height: 24dp;
+    font-size: 12dp;
+    padding: 2dp 6dp;
+    margin-top: 0;
+    flex-shrink: 0;
 }
 
 .viewport-selection-depth-fields {
@@ -167,8 +208,33 @@ body {
     box-sizing: border-box;
 }
 
+.viewport-depth-fields {
+    flex-grow: 0;
+    flex-shrink: 0;
+    flex-wrap: nowrap;
+    gap: 8dp;
+}
+
+.viewport-depth-axis {
+    gap: 4dp;
+}
+
+.viewport-selection-slider.viewport-depth-slider {
+    width: 128dp;
+    min-width: 128dp;
+}
+
+.viewport-selection-depth-axis > .number-input.viewport-depth-input {
+    width: 74dp;
+    min-width: 74dp;
+}
+
 .viewport-selection-actions {
     margin-left: auto;
+}
+
+.viewport-depth-actions {
+    margin-left: 0;
 }
 
 .viewport-transform-panel {
@@ -186,6 +252,10 @@ body {
 
 .viewport-transform-panel.viewport-selection-panel {
     min-width: 600dp;
+}
+
+.viewport-transform-panel.viewport-depth-panel {
+    min-width: 624dp;
 }
 
 .viewport-transform-header {

@@ -91,8 +91,10 @@ namespace lfs::vis {
             float voxel_size = 0.01f;
             float scaling_modifier = 1.0f;
             bool depth_view = false;
-            float depth_view_min = lfs::rendering::DEFAULT_NEAR_PLANE;
-            float depth_view_max = lfs::rendering::DEFAULT_FAR_PLANE;
+            float depth_view_min = lfs::rendering::DEFAULT_DEPTH_VIEW_MIN;
+            float depth_view_max = lfs::rendering::DEFAULT_DEPTH_VIEW_MAX;
+            lfs::rendering::DepthVisualizationMode depth_visualization_mode =
+                lfs::rendering::DepthVisualizationMode::Palette;
         };
 
         enum class OutputSlot : std::size_t {

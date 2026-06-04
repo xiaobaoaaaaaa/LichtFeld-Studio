@@ -5,6 +5,7 @@
 from pathlib import Path
 from urllib.parse import quote
 
+from .depth_view_controls import DepthViewControlsController
 from .histogram_support import histogram_mode_available
 from .selection_controls import SelectionControlsController
 from .tools import ToolRegistry
@@ -67,6 +68,22 @@ def _tooltip_text(label, shortcut=""):
     return label or ""
 
 
+def _localized_tooltip(tooltip_key, fallback=""):
+    if not tooltip_key:
+        return fallback or ""
+    try:
+        import lichtfeld as lf
+
+        tr = getattr(getattr(lf, "ui", None), "tr", None)
+        if callable(tr):
+            text = tr(tooltip_key)
+            if text and text != tooltip_key:
+                return text
+    except Exception:
+        pass
+    return fallback or ""
+
+
 def _keymap_shortcut(action_id, fallback=""):
     if not action_id:
         return fallback or ""
@@ -102,7 +119,7 @@ def _button_record(button_id, action, value, icon_src, *,
         "value": value,
         "icon_src": icon_src,
         "tooltip_key": tooltip_key,
-        "tooltip_text": tooltip_text,
+        "tooltip_text": _localized_tooltip(tooltip_key, tooltip_text),
         "action_id": action_id,
         "shortcut_text": _keymap_shortcut(action_id, shortcut_text),
         "selected": selected,
@@ -271,7 +288,7 @@ class _GizmoToolbarController:
             tool_def.id,
             _tool_icon_src(tool_def),
             tooltip_key=tooltip_key,
-            tooltip_text="" if tooltip_key else _tooltip_text(tool_def.label, tool_def.shortcut),
+            tooltip_text=_tooltip_text(tool_def.label, tool_def.shortcut),
             action_id=self._TOOL_ACTIONS.get(tool_def.id, ""),
             shortcut_text=tool_def.shortcut,
             selected=_tool_selected(tool_def, active_tool_id, context),
@@ -307,7 +324,7 @@ class _GizmoToolbarController:
                     mode.id,
                     _icon_src(mode.icon) if mode.icon else "",
                     tooltip_key=tooltip_key,
-                    tooltip_text="" if tooltip_key else _tooltip_text(mode.label, mode.shortcut),
+                    tooltip_text=_tooltip_text(mode.label, mode.shortcut),
                     action_id=self._SELECTION_MODE_ACTIONS.get(mode.id, ""),
                     shortcut_text=mode.shortcut,
                     selected=selected,
@@ -321,7 +338,7 @@ class _GizmoToolbarController:
             "builtin.select",
             _tool_icon_src(tool_def),
             tooltip_key=self._TOOL_LOCALE_KEYS.get(tool_def.id, ""),
-            tooltip_text="",
+            tooltip_text=_tooltip_text(tool_def.label, getattr(tool_def, "shortcut", "")),
             action_id="TOOL_SELECT",
             shortcut_text=getattr(tool_def, "shortcut", ""),
             selected=active_tool_id == "builtin.select",
@@ -343,7 +360,7 @@ class _GizmoToolbarController:
             "group-transform",
             "tool",
             active_button["value"] if active_button else fallback["value"],
-            fallback["icon_src"],
+            active_button["icon_src"] if active_button else fallback["icon_src"],
             tooltip_text="Transform Tools",
             action_id=fallback["action_id"],
             shortcut_text=fallback["shortcut_text"],
@@ -362,7 +379,7 @@ class _GizmoToolbarController:
                 self._MIRROR_TOOL_ID,
                 _tool_icon_src(tool_def),
                 tooltip_key=self._TOOL_LOCALE_KEYS.get(self._MIRROR_TOOL_ID, ""),
-                tooltip_text="",
+                tooltip_text=_tooltip_text(tool_def.label, getattr(tool_def, "shortcut", "")),
                 action_id=self._TOOL_ACTIONS.get(self._MIRROR_TOOL_ID, ""),
                 shortcut_text=getattr(tool_def, "shortcut", ""),
                 selected=active_tool_id == self._MIRROR_TOOL_ID,
@@ -408,7 +425,7 @@ class _GizmoToolbarController:
                     mode.id,
                     _icon_src(mode.icon) if mode.icon else "",
                     tooltip_key=tooltip_key,
-                    tooltip_text="" if tooltip_key else _tooltip_text(mode.label, mode.shortcut),
+                    tooltip_text=_tooltip_text(mode.label, mode.shortcut),
                     shortcut_text=mode.shortcut,
                     selected=selected,
                 )
@@ -434,7 +451,7 @@ class _GizmoToolbarController:
                     mode.id,
                     _icon_src(mode.icon) if mode.icon else "",
                     tooltip_key=tooltip_key,
-                    tooltip_text="" if tooltip_key else mode.label,
+                    tooltip_text=mode.label,
                     selected=current_pivot == self._PIVOT_IDS.get(mode.id, -1),
                 )
             )
@@ -516,10 +533,10 @@ class _UtilityToolbarController:
         ("camera-fpv", "fpv", "Fly Camera"),
     )
     _RENDER_MODE_SPECS = (
-        ("blob", "splats", "toolbar.splat_rendering"),
-        ("dots-diagonal", "points", "toolbar.point_cloud"),
-        ("ring", "rings", "toolbar.gaussian_rings"),
-        ("circle-dot", "centers", "toolbar.center_markers"),
+        ("blob", "splats", "toolbar.splat_rendering", "Splat Rendering"),
+        ("dots-diagonal", "points", "toolbar.point_cloud", "Point Cloud"),
+        ("ring", "rings", "toolbar.gaussian_rings", "Gaussian Rings"),
+        ("circle-dot", "centers", "toolbar.center_markers", "Center Markers"),
     )
     _PRIMARY_ACTIONS = {
         "home": "CAMERA_RESET_HOME",
@@ -587,6 +604,7 @@ class _UtilityToolbarController:
         primary_buttons = [
             _button_record("util-home", "home", "", _icon_src("home"),
                            tooltip_key="toolbar.home",
+                           tooltip_text="Home",
                            action_id=self._PRIMARY_ACTIONS["home"]),
             _button_record(
                 "util-fullscreen",
@@ -594,11 +612,13 @@ class _UtilityToolbarController:
                 "",
                 _icon_src("arrows-minimize" if is_fullscreen else "arrows-maximize"),
                 tooltip_key="toolbar.fullscreen",
+                tooltip_text="Fullscreen",
                 action_id=self._PRIMARY_ACTIONS["fullscreen"],
                 selected=is_fullscreen,
             ),
             _button_record("util-toggle-ui", "toggle_ui", "", _icon_src("layout-off"),
                            tooltip_key="toolbar.toggle_ui",
+                           tooltip_text="Toggle UI",
                            action_id=self._PRIMARY_ACTIONS["toggle_ui"]),
         ]
 
@@ -608,7 +628,7 @@ class _UtilityToolbarController:
         utility_extra_buttons = []
         utility_bottom_buttons = []
         if has_render_manager:
-            for icon_name, mode_id, tooltip_key in self._RENDER_MODE_SPECS:
+            for icon_name, mode_id, tooltip_key, tooltip_text in self._RENDER_MODE_SPECS:
                 render_mode_buttons.append(
                     _button_record(
                         f"util-render-{mode_id}",
@@ -616,6 +636,7 @@ class _UtilityToolbarController:
                         mode_id,
                         _icon_src(icon_name),
                         tooltip_key=tooltip_key,
+                        tooltip_text=tooltip_text,
                         selected=render_mode == mode_map.get(mode_id),
                     )
                 )
@@ -640,6 +661,7 @@ class _UtilityToolbarController:
                     "",
                     _icon_src("box" if is_ortho else "perspective"),
                     tooltip_key="toolbar.orthographic" if is_ortho else "toolbar.perspective",
+                    tooltip_text="Orthographic" if is_ortho else "Perspective",
                     selected=is_ortho,
                 )
             )
@@ -672,6 +694,7 @@ class _UtilityToolbarController:
                     "",
                     _icon_src("depth-map"),
                     tooltip_key="toolbar.depth_map",
+                    tooltip_text="Depth Map",
                     selected=depth_view_active,
                 )
             )
@@ -684,6 +707,7 @@ class _UtilityToolbarController:
                     "",
                     _icon_src("video"),
                     tooltip_key="toolbar.sequencer",
+                    tooltip_text="Sequencer",
                     selected=seq_visible,
                 )
             )
@@ -716,6 +740,7 @@ class _UtilityToolbarController:
                     "lfs.histogram",
                     _icon_src("histogram.png"),
                     tooltip_key="toolbar.histogram",
+                    tooltip_text="Histogram",
                     selected=lf.ui.is_panel_enabled("lfs.histogram"),
                 )
             )
@@ -827,6 +852,7 @@ class _ViewportToolbarController:
     def __init__(self):
         self._gizmo = _GizmoToolbarController()
         self._utility = _UtilityToolbarController()
+        self._depth_view_controls = DepthViewControlsController()
         self._selection_controls = SelectionControlsController()
         self._transform_controls = TransformControlsController()
         self.reset()
@@ -846,6 +872,7 @@ class _ViewportToolbarController:
         self._show_pivot_toolbar = False
         self._gizmo.reset()
         self._utility.reset()
+        self._depth_view_controls.unmount()
         self._selection_controls.unmount()
         self._transform_controls.unmount()
 
@@ -855,6 +882,7 @@ class _ViewportToolbarController:
         for field in self._RECORD_FIELDS:
             model.bind_record_list(field)
         model.bind_event("toolbar_action", self._on_toolbar_action)
+        self._depth_view_controls.bind_model(model)
         self._selection_controls.bind_model(model)
         self._transform_controls.bind_model(model)
 
@@ -876,6 +904,7 @@ class _ViewportToolbarController:
         mount_key = self._mount_key(doc) if can_update_tool_overlays else None
         if mount_key is not None and mount_key != self._mounted_doc_key:
             self._mounted_doc_key = mount_key
+            self._depth_view_controls.mount(doc)
             self._selection_controls.mount(doc)
             self._transform_controls.mount(doc)
             dirty_sources.append("mount")
@@ -883,13 +912,25 @@ class _ViewportToolbarController:
         if self._sync_toolbar_state(doc):
             dirty_sources.append("records")
         if can_update_tool_overlays:
-            selection_dirty = self._selection_controls.update(doc)
-            if selection_dirty:
-                dirty_sources.append(f"selection_controls:{selection_dirty}")
-            transform_dirty = self._transform_controls.update(doc)
-            if transform_dirty:
-                dirty_sources.append("transform_controls")
+            depth_dirty = self._depth_view_controls.update(doc)
+            if depth_dirty:
+                dirty_sources.append(f"depth_view_controls:{depth_dirty}")
+            if self._depth_view_controls.visible:
+                self._hide_tool_overlay(doc, "selection-block")
+                self._hide_tool_overlay(doc, "transform-block")
+            else:
+                selection_dirty = self._selection_controls.update(doc)
+                if selection_dirty:
+                    dirty_sources.append(f"selection_controls:{selection_dirty}")
+                transform_dirty = self._transform_controls.update(doc)
+                if transform_dirty:
+                    dirty_sources.append("transform_controls")
         return dirty_sources
+
+    def _hide_tool_overlay(self, doc, element_id):
+        element = doc.get_element_by_id(element_id)
+        if element:
+            element.set_class("hidden", True)
 
     def _mount_key(self, doc):
         body = doc.get_element_by_id("overlay-body")

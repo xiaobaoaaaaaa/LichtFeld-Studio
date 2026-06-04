@@ -188,7 +188,8 @@ namespace lfs::vis {
             bool transparent_background,
             bool depth_view,
             float depth_min,
-            float depth_max);
+            float depth_max,
+            lfs::rendering::DepthVisualizationMode depth_visualization_mode);
         [[nodiscard]] std::expected<void, std::string> waitForRingSlot(
             std::size_t ring_slot,
             std::string_view reason);

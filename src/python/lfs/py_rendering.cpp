@@ -740,6 +740,14 @@ namespace lfs::python {
                      2);
         add_bool(&Proxy::mip_filter, "mip_filter", "Mip Filter", "Enable mip-map filtering", false);
         add_float(&Proxy::render_scale, "render_scale", "Render Scale", "Render resolution scale", 1.0, 0.25, 1.0);
+        add_float(&Proxy::depth_view_min, "depth_view_min", "Depth Near", "Depth-map visualization near range",
+                  lfs::rendering::DEFAULT_DEPTH_VIEW_MIN, 0.0, lfs::rendering::MAX_DEPTH_VIEW_DISTANCE);
+        add_float(&Proxy::depth_view_max, "depth_view_max", "Depth Far", "Depth-map visualization far range",
+                  lfs::rendering::DEFAULT_DEPTH_VIEW_MAX, lfs::rendering::DEFAULT_DEPTH_VIEW_MIN,
+                  lfs::rendering::MAX_DEPTH_VIEW_DISTANCE);
+        add_int_enum(&Proxy::depth_visualization_mode, "depth_visualization_mode", "Depth Mode",
+                     "Depth-map visualization mode",
+                     {{"Color", "palette", 0}, {"Gray", "gray", 1}}, 0);
         add_int_enum(&Proxy::camera_metrics_mode, "camera_metrics_mode", "Camera Metrics",
                      "Compute metrics when jumping to a source camera",
                      {{"Off", "OFF", 0}, {"PSNR", "PSNR", 1}, {"PSNR + SSIM", "PSNR_SSIM", 2}}, 0);

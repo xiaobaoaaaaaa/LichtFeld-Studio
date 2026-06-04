@@ -38,19 +38,28 @@ namespace lfs::vis::gui {
                 text.append(" (").append(shortcut).append(")");
             return text;
         }
+
+        Rml::String trimmedTooltipKey(Rml::String key) {
+            const auto first = key.find_first_not_of(" \t\r\n");
+            if (first == Rml::String::npos)
+                return {};
+            const auto last = key.find_last_not_of(" \t\r\n");
+            return key.substr(first, last - first + 1);
+        }
     } // namespace
 
     std::string resolveRmlTooltip(Rml::Element* hover) {
         auto& loc = lfs::event::LocalizationManager::getInstance();
         for (auto* el = hover; el; el = el->GetParentNode()) {
-            if (const auto key = el->GetAttribute<Rml::String>("data-tooltip", ""); !key.empty()) {
+            const auto title = el->GetAttribute<Rml::String>("title", "");
+            if (auto key = trimmedTooltipKey(el->GetAttribute<Rml::String>("data-tooltip", ""));
+                !key.empty()) {
                 const char* const resolved = loc.get(key);
-                if (!resolved || resolved == key)
-                    return {};
-                return appendShortcut(el, resolved);
+                if (resolved && resolved != key)
+                    return appendShortcut(el, resolved);
             }
-            if (auto title = el->GetAttribute<Rml::String>("title", ""); !title.empty())
-                return appendShortcut(el, std::move(title));
+            if (!title.empty())
+                return appendShortcut(el, title);
         }
         return {};
     }

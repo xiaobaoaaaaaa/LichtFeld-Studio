@@ -466,6 +466,18 @@ def get_depth_view() -> bool:
 def set_depth_view(enabled: bool) -> None:
     """Enable or disable depth-map view"""
 
+def get_depth_view_range() -> tuple[float, float]:
+    """Get depth-map visualization range: (near, far)"""
+
+def set_depth_view_range(depth_min: float, depth_max: float) -> None:
+    """Set depth-map visualization range"""
+
+def get_depth_view_mode() -> str:
+    """Get depth-map visualization mode: 'palette' or 'gray'"""
+
+def set_depth_view_mode(mode: str) -> None:
+    """Set depth-map visualization mode"""
+
 def set_orthographic(ortho: bool) -> None:
     """Enable or disable orthographic projection"""
 

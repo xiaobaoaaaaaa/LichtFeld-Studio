@@ -1051,7 +1051,7 @@ namespace lfs::vis {
             glm::vec4 background{0.0f, 0.0f, 0.0f, 1.0f};
             float depth_min = 0.0f;
             float depth_max = 1.0f;
-            float pad1 = 0.0f;
+            std::uint32_t depth_visualization_mode = 0;
             float pad2 = 0.0f;
         };
 
@@ -3067,7 +3067,8 @@ namespace lfs::vis {
         const bool transparent_background,
         const bool depth_view,
         const float depth_min,
-        const float depth_max) {
+        const float depth_max,
+        const lfs::rendering::DepthVisualizationMode depth_visualization_mode) {
         if (auto ok = ensureComposePipeline(context); !ok) {
             return ok;
         }
@@ -3202,6 +3203,7 @@ namespace lfs::vis {
             .background = glm::vec4(background, 1.0f),
             .depth_min = depth_min,
             .depth_max = depth_max,
+            .depth_visualization_mode = static_cast<std::uint32_t>(depth_visualization_mode),
         };
         vkCmdPushConstants(cmd,
                            compose_->pipeline_layout,
@@ -4294,7 +4296,8 @@ namespace lfs::vis {
                         request.transparent_background,
                         request.depth_view,
                         request.depth_view_min,
-                        request.depth_view_max);
+                        request.depth_view_max,
+                        request.depth_visualization_mode);
                 }
             }
         } catch (const std::exception& e) {
@@ -4618,7 +4621,8 @@ namespace lfs::vis {
                         request.transparent_background,
                         request.depth_view,
                         request.depth_view_min,
-                        request.depth_view_max);
+                        request.depth_view_max,
+                        request.depth_visualization_mode);
                 }
             }
             // record/composePixelState timer scope ends here.
