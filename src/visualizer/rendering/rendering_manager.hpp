@@ -127,24 +127,51 @@ namespace lfs::vis {
                                                               const glm::mat3& camera_rotation,
                                                               const glm::vec3& camera_position,
                                                               float focal_length_mm,
-                                                              int width, int height);
+                                                              int width, int height,
+                                                              std::optional<glm::vec3> background_color_override = std::nullopt,
+                                                              std::optional<bool> orthographic_override = std::nullopt,
+                                                              std::optional<float> ortho_scale_override = std::nullopt);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgb8(SceneManager* scene_manager,
                                                                   const glm::mat3& camera_rotation,
                                                                   const glm::vec3& camera_position,
                                                                   float focal_length_mm,
-                                                                  int width, int height);
+                                                                  int width, int height,
+                                                                  std::optional<glm::vec3> background_color_override = std::nullopt,
+                                                                  std::optional<bool> orthographic_override = std::nullopt,
+                                                                  std::optional<float> ortho_scale_override = std::nullopt);
+        std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgba8(SceneManager* scene_manager,
+                                                                   const glm::mat3& camera_rotation,
+                                                                   const glm::vec3& camera_position,
+                                                                   float focal_length_mm,
+                                                                   int width, int height,
+                                                                   std::optional<bool> orthographic_override = std::nullopt,
+                                                                   std::optional<float> ortho_scale_override = std::nullopt);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImage(const lfs::core::SplatData& model,
                                                               SceneRenderState scene_state,
                                                               const glm::mat3& camera_rotation,
                                                               const glm::vec3& camera_position,
                                                               float focal_length_mm,
-                                                              int width, int height);
+                                                              int width, int height,
+                                                              std::optional<glm::vec3> background_color_override = std::nullopt,
+                                                              std::optional<bool> orthographic_override = std::nullopt,
+                                                              std::optional<float> ortho_scale_override = std::nullopt);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgb8(const lfs::core::SplatData& model,
                                                                   SceneRenderState scene_state,
                                                                   const glm::mat3& camera_rotation,
                                                                   const glm::vec3& camera_position,
                                                                   float focal_length_mm,
-                                                                  int width, int height);
+                                                                  int width, int height,
+                                                                  std::optional<glm::vec3> background_color_override = std::nullopt,
+                                                                  std::optional<bool> orthographic_override = std::nullopt,
+                                                                  std::optional<float> ortho_scale_override = std::nullopt);
+        std::shared_ptr<lfs::core::Tensor> renderPreviewImageRgba8(const lfs::core::SplatData& model,
+                                                                   SceneRenderState scene_state,
+                                                                   const glm::mat3& camera_rotation,
+                                                                   const glm::vec3& camera_position,
+                                                                   float focal_length_mm,
+                                                                   int width, int height,
+                                                                   std::optional<bool> orthographic_override = std::nullopt,
+                                                                   std::optional<float> ortho_scale_override = std::nullopt);
         void releasePreviewImageResources();
 
         [[nodiscard]] lfs::io::SplatTensorAllocator makeSplatTensorAllocator() const;
@@ -460,6 +487,22 @@ namespace lfs::vis {
         bool consumeResizeCompleted() { return frame_lifecycle_service_.consumeResizeCompleted(); }
 
     private:
+        enum class PreviewImageReadback {
+            FloatRgb,
+            UInt8Rgb,
+            UInt8Rgba,
+        };
+
+        struct PreviewImageReadbackConfig {
+            lfs::core::DataType dtype = lfs::core::DataType::Float32;
+            int channels = 3;
+            std::optional<bool> transparent_background_override;
+        };
+
+        [[nodiscard]] static PreviewImageReadbackConfig previewImageReadbackConfig(
+            PreviewImageReadback readback,
+            bool has_background_color_override);
+
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
@@ -471,7 +514,10 @@ namespace lfs::vis {
             int height,
             bool render_lock_held,
             std::optional<lfs::rendering::CameraIntrinsics> intrinsics_override,
-            lfs::core::DataType output_dtype);
+            std::optional<bool> orthographic_override,
+            std::optional<float> ortho_scale_override,
+            std::optional<glm::vec3> background_color_override,
+            PreviewImageReadback readback);
         [[nodiscard]] std::expected<void, std::string> renderPreviewImageToPreviewSlotWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
@@ -484,7 +530,11 @@ namespace lfs::vis {
             bool render_lock_held,
             std::optional<lfs::rendering::CameraIntrinsics> intrinsics_override,
             glm::ivec2 subregion_origin,
-            glm::ivec2 subregion_full_size);
+            glm::ivec2 subregion_full_size,
+            std::optional<bool> orthographic_override,
+            std::optional<float> ortho_scale_override,
+            std::optional<glm::vec3> background_color_override,
+            std::optional<bool> transparent_background_override);
         std::shared_ptr<lfs::core::Tensor> renderPreviewImageTiledWithState(
             SceneManager* scene_manager,
             const lfs::core::SplatData& model,
@@ -495,7 +545,10 @@ namespace lfs::vis {
             int width,
             int height,
             bool render_lock_held,
-            lfs::core::DataType output_dtype);
+            std::optional<glm::vec3> background_color_override,
+            std::optional<bool> orthographic_override,
+            std::optional<float> ortho_scale_override,
+            PreviewImageReadback readback);
 
         struct CameraMetricsJobRequest {
             uint64_t generation = 0;

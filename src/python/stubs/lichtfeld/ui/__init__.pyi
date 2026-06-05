@@ -1948,6 +1948,16 @@ def save_json_file_dialog(default_name: str = 'config.json') -> str:
     Open a save file dialog for JSON files. Returns empty string if cancelled.
     """
 
+def save_png_file_dialog(default_name: str = 'export.png') -> str:
+    """
+    Open a save file dialog for PNG images. Returns empty string if cancelled.
+    """
+
+def save_jpg_file_dialog(default_name: str = 'export.jpg') -> str:
+    """
+    Open a save file dialog for JPEG images. Returns empty string if cancelled.
+    """
+
 def save_ply_file_dialog(default_name: str = 'export') -> str:
     """
     Open a save file dialog for PLY files. Returns empty string if cancelled.

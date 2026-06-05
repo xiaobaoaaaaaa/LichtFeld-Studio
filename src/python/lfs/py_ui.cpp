@@ -3945,6 +3945,24 @@ namespace lfs::python {
             "Open a save file dialog for JSON files. Returns empty string if cancelled.");
 
         m.def(
+            "save_png_file_dialog",
+            [](const std::string& default_name) -> std::string {
+                auto result = lfs::vis::gui::SavePngFileDialog(default_name);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "export.png",
+            "Open a save file dialog for PNG images. Returns empty string if cancelled.");
+
+        m.def(
+            "save_jpg_file_dialog",
+            [](const std::string& default_name) -> std::string {
+                auto result = lfs::vis::gui::SaveJpgFileDialog(default_name);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "export.jpg",
+            "Open a save file dialog for JPEG images. Returns empty string if cancelled.");
+
+        m.def(
             "save_ply_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SavePlyFileDialog(default_name);

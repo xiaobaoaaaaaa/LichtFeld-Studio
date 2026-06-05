@@ -11,6 +11,7 @@ from .selection_controls import SelectionControlsController
 from .tools import ToolRegistry
 from .transform_controls import TransformControlsController
 from .ui import RuntimeState
+from .viewport_export_controls import ViewportExportControlsController
 
 try:
     from .ui import native_value as _native_store_value
@@ -707,7 +708,8 @@ class _UtilityToolbarController:
         "toggle_ui": "TOGGLE_UI",
     }
 
-    def __init__(self):
+    def __init__(self, viewport_export_visible=None):
+        self._viewport_export_visible = viewport_export_visible
         self.reset()
 
     def reset(self):
@@ -719,6 +721,14 @@ class _UtilityToolbarController:
 
     def close_group(self):
         self._active_group = ""
+
+    def _is_viewport_export_visible(self):
+        if not callable(self._viewport_export_visible):
+            return False
+        try:
+            return bool(self._viewport_export_visible())
+        except Exception:
+            return False
 
     def snapshot(self):
         import lichtfeld as lf
@@ -797,6 +807,15 @@ class _UtilityToolbarController:
                 tooltip_key="window.input_settings",
                 tooltip_text="Input Settings",
                 selected=_panel_enabled(self._INPUT_SETTINGS_PANEL_ID),
+            ),
+            _button_record(
+                "util-viewport-export",
+                "toggle_viewport_export",
+                "",
+                _icon_src("sequencer/export"),
+                tooltip_key="toolbar.viewport_export",
+                tooltip_text="Viewport Export",
+                selected=self._is_viewport_export_visible(),
             ),
             _button_record(
                 "util-asset-manager",
@@ -1047,8 +1066,9 @@ class _ViewportToolbarController:
 
     def __init__(self):
         self._gizmo = _GizmoToolbarController()
-        self._utility = _UtilityToolbarController()
         self._depth_view_controls = DepthViewControlsController()
+        self._viewport_export_controls = ViewportExportControlsController()
+        self._utility = _UtilityToolbarController(lambda: self._viewport_export_controls.visible)
         self._selection_controls = SelectionControlsController()
         self._transform_controls = TransformControlsController()
         self.reset()
@@ -1056,6 +1076,7 @@ class _ViewportToolbarController:
     def reset(self):
         self._handle = None
         self._mounted_doc_key = None
+        self._current_doc = None
         self._next_doc_key = getattr(self, "_next_doc_key", 1)
         self._record_cache = {name: None for name in self._RECORD_FIELDS}
         self._last_toolbar_signature = None
@@ -1070,6 +1091,7 @@ class _ViewportToolbarController:
         self._gizmo.reset()
         self._utility.reset()
         self._depth_view_controls.unmount()
+        self._viewport_export_controls.unmount()
         self._selection_controls.unmount()
         self._transform_controls.unmount()
 
@@ -1080,6 +1102,7 @@ class _ViewportToolbarController:
             model.bind_record_list(field)
         model.bind_event("toolbar_action", self._on_toolbar_action)
         self._depth_view_controls.bind_model(model)
+        self._viewport_export_controls.bind_model(model)
         self._selection_controls.bind_model(model)
         self._transform_controls.bind_model(model)
 
@@ -1098,10 +1121,12 @@ class _ViewportToolbarController:
             return dirty_sources
 
         can_update_tool_overlays = hasattr(doc, "get_element_by_id")
+        self._current_doc = doc if can_update_tool_overlays else None
         mount_key = self._mount_key(doc) if can_update_tool_overlays else None
         if mount_key is not None and mount_key != self._mounted_doc_key:
             self._mounted_doc_key = mount_key
             self._depth_view_controls.mount(doc)
+            self._viewport_export_controls.mount(doc)
             self._record_cache = {name: None for name in self._RECORD_FIELDS}
             self._last_toolbar_signature = None
             self._selection_controls.mount(doc)
@@ -1114,7 +1139,14 @@ class _ViewportToolbarController:
             depth_dirty = self._depth_view_controls.update(doc)
             if depth_dirty:
                 dirty_sources.append(f"depth_view_controls:{depth_dirty}")
-            if self._depth_view_controls.visible:
+            viewport_export_dirty = self._viewport_export_controls.update(doc)
+            if viewport_export_dirty:
+                dirty_sources.append(f"viewport_export_controls:{viewport_export_dirty}")
+            if self._viewport_export_controls.visible:
+                self._hide_tool_overlay(doc, "depth-view-block")
+                self._hide_tool_overlay(doc, "selection-block")
+                self._hide_tool_overlay(doc, "transform-block")
+            elif self._depth_view_controls.visible:
                 self._hide_tool_overlay(doc, "selection-block")
                 self._hide_tool_overlay(doc, "transform-block")
             else:
@@ -1130,6 +1162,30 @@ class _ViewportToolbarController:
         element = doc.get_element_by_id(element_id)
         if element:
             element.set_class("hidden", True)
+
+    def _sync_tool_overlays_now(self):
+        doc = self._current_doc
+        if doc is None or not hasattr(doc, "get_element_by_id"):
+            return
+
+        self._depth_view_controls.update(doc)
+        self._viewport_export_controls.update(doc)
+        if self._viewport_export_controls.visible:
+            self._hide_tool_overlay(doc, "depth-view-block")
+            self._hide_tool_overlay(doc, "selection-block")
+            self._hide_tool_overlay(doc, "transform-block")
+        elif self._depth_view_controls.visible:
+            self._hide_tool_overlay(doc, "selection-block")
+            self._hide_tool_overlay(doc, "transform-block")
+
+        try:
+            import lichtfeld as lf
+
+            request_redraw = getattr(lf.ui, "request_redraw", None)
+            if callable(request_redraw):
+                request_redraw()
+        except Exception:
+            pass
 
     def _mount_key(self, doc):
         body = doc.get_element_by_id("overlay-body")
@@ -1355,6 +1411,7 @@ class _ViewportToolbarController:
             bool(call(False, lf.is_fullscreen)) if hasattr(lf, "is_fullscreen") else False,
             call("", getattr(lf.ui, "get_split_view_mode", None)),
             bool(call(False, lf.get_depth_view)) if hasattr(lf, "get_depth_view") else False,
+            self._viewport_export_controls.visible,
             bool(call(False, getattr(lf.ui, "is_sequencer_visible", None))),
             vram_profiler_enabled,
             bool(histogram_mode_available(ui_context)) if ui_context is not None else False,
@@ -1369,6 +1426,14 @@ class _ViewportToolbarController:
             return
         action = str(args[0])
         value = str(args[1]) if len(args) > 1 else ""
+        if action == "toggle_viewport_export":
+            self._utility.close_group()
+            self._gizmo.clear_active_horizontal_tool()
+            self._viewport_export_controls.toggle()
+            self._last_toolbar_signature = None
+            self._sync_toolbar_state()
+            self._sync_tool_overlays_now()
+            return
         if action in {
             "tool",
             "submode",
@@ -1380,13 +1445,17 @@ class _ViewportToolbarController:
             "crop_apply",
         }:
             self._utility.close_group()
+            self._viewport_export_controls.close()
             self._gizmo.dispatch(action, value)
         else:
             if action == "render_group" and self._utility.active_group != "render":
                 self._gizmo.clear_active_horizontal_tool()
+            if action == "toggle_depth_view":
+                self._viewport_export_controls.close()
             self._utility.dispatch(action, value)
         self._last_toolbar_signature = None
         self._sync_toolbar_state()
+        self._sync_tool_overlays_now()
 
 
 def _ensure_controller():

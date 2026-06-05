@@ -68,6 +68,7 @@ class _DataModelHandleStub:
     def __init__(self):
         self.dirty_all_calls = 0
         self.dirty_calls = []
+        self.request_update_calls = 0
         self.record_updates = {}
 
     def dirty_all(self):
@@ -75,6 +76,9 @@ class _DataModelHandleStub:
 
     def dirty(self, name):
         self.dirty_calls.append(name)
+
+    def request_update(self):
+        self.request_update_calls += 1
 
     def update_record_list(self, name, records):
         self.record_updates[name] = records
@@ -104,6 +108,104 @@ class _DataModelStub:
         return self.handle
 
 
+class _ElementStub:
+    def __init__(self, element_id):
+        self.element_id = element_id
+        self.classes = {"hidden"}
+        self.attributes = {}
+        self.properties = {}
+        self.text = ""
+        self.animations = []
+        self.listeners = {}
+
+    def set_class(self, name, enabled):
+        if enabled:
+            self.classes.add(name)
+        else:
+            self.classes.discard(name)
+
+    def set_text(self, text):
+        self.text = text
+
+    def get_attribute(self, name, fallback=""):
+        return self.attributes.get(name, fallback)
+
+    def set_attribute(self, name, value):
+        self.attributes[name] = value
+
+    def set_property(self, name, value):
+        self.properties[name] = value
+        return True
+
+    def remove_property(self, name):
+        self.properties.pop(name, None)
+
+    def animate(
+        self,
+        property_name,
+        target_value,
+        duration,
+        tween="quadratic-out",
+        start_value=None,
+        remove_on_complete=False,
+    ):
+        self.animations.append(
+            (
+                property_name,
+                target_value,
+                duration,
+                tween,
+                start_value,
+                remove_on_complete,
+            )
+        )
+        return True
+
+    def add_event_listener(self, event_name, callback):
+        self.listeners.setdefault(event_name, []).append(callback)
+
+
+class _DocumentStub:
+    def __init__(self):
+        self.elements = {
+            element_id: _ElementStub(element_id)
+            for element_id in (
+                "overlay-body",
+                "dm-root",
+                "depth-view-block",
+                "viewport-export-block",
+                "viewport-export-status",
+                "selection-block",
+                "transform-block",
+            )
+        }
+
+    def get_element_by_id(self, element_id):
+        return self.elements.get(element_id)
+
+
+def _install_timer_stub(module, monkeypatch):
+    timers = []
+
+    class _TimerStub:
+        def __init__(self, delay, callback):
+            self.delay = delay
+            self.callback = callback
+            self.daemon = False
+            self.cancelled = False
+            self.started = False
+
+        def start(self):
+            self.started = True
+            timers.append(self)
+
+        def cancel(self):
+            self.cancelled = True
+
+    monkeypatch.setattr(module.threading, "Timer", _TimerStub)
+    return timers
+
+
 @pytest.fixture
 def toolbar_module(monkeypatch):
     project_root = Path(__file__).parent.parent.parent
@@ -116,6 +218,7 @@ def toolbar_module(monkeypatch):
     sys.modules.pop("lfs_plugins.toolbar", None)
     sys.modules.pop("lfs_plugins.selection_controls", None)
     sys.modules.pop("lfs_plugins.transform_controls", None)
+    sys.modules.pop("lfs_plugins.viewport_export_controls", None)
     hook_calls, remove_calls = _install_stub_modules(monkeypatch)
     module = import_module("lfs_plugins.toolbar")
     return module, hook_calls, remove_calls
@@ -168,6 +271,14 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "transform_show_actions" in model.bound_funcs
     assert "transform_pos_x_str" in model.bound_binds
     assert "transform_num_step" in model.bound_events
+    assert "viewport_export_tool_label" in model.bound_funcs
+    assert "viewport_export_format_value" in model.bound_binds
+    assert "viewport_export_resolution_value" in model.bound_binds
+    assert "viewport_export_transparency" in model.bound_binds
+    assert "viewport_export_custom_width_str" in model.bound_binds
+    assert "viewport_export_custom_height_str" in model.bound_binds
+    assert "viewport_export_can_export" in model.bound_funcs
+    assert "viewport_export_action" in model.bound_events
 
 
 def test_toolbar_attach_handle_marks_model_dirty(toolbar_module):
@@ -760,6 +871,11 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert ".viewport-selection-depth-fields" in rcss
     assert ".viewport-selection-slider" in rcss
     assert ".viewport-transform-panel" in rcss
+    assert 'class="viewport-depth-overlay viewport-export-overlay hidden"' in rml
+    assert 'id="viewport-export-status"' in rml
+    panel_start = rml.index('class="viewport-transform-panel viewport-export-panel"')
+    panel_end = rml.index('<span id="viewport-export-status"')
+    assert "viewport-export-status" not in rml[panel_start:panel_end]
 
 
 def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypatch):
@@ -798,6 +914,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
             "toolbar.asset_manager": "Assets",
             "menu.tools.plugin_marketplace": "Plugins",
             "window.input_settings": "Input",
+            "toolbar.viewport_export": "Export",
         }.get(key, key),
         raising=False,
     )
@@ -830,26 +947,32 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     assert [button["action"] for button in primary_buttons] == ["home", "fullscreen", "toggle_ui"]
     assert [button["button_id"] for button in extra_buttons] == [
         "util-input-settings",
+        "util-viewport-export",
         "util-asset-manager",
         "util-plugin-marketplace",
         "util-sequencer",
     ]
-    input_settings = extra_buttons[0]
+    extra_by_id = {button["button_id"]: button for button in extra_buttons}
+    input_settings = extra_by_id["util-input-settings"]
     assert input_settings["action"] == "toggle_panel"
     assert input_settings["value"] == "lfs.input_settings"
     assert input_settings["icon_src"] == "../icon/settings.png"
     assert input_settings["tooltip_text"] == "Input"
     assert input_settings["selected"] is True
-    assert extra_buttons[1]["action"] == "toggle_panel"
-    assert extra_buttons[1]["value"] == "lfs.asset_manager"
-    assert extra_buttons[1]["icon_src"] == "../icon/archive.png"
-    assert extra_buttons[1]["tooltip_text"] == "Assets"
-    assert extra_buttons[1]["selected"] is True
-    assert extra_buttons[2]["action"] == "toggle_panel"
-    assert extra_buttons[2]["value"] == "lfs.plugin_marketplace"
-    assert extra_buttons[2]["icon_src"] == "../icon/puzzle.png"
-    assert extra_buttons[2]["tooltip_text"] == "Plugins"
-    assert extra_buttons[2]["selected"] is True
+    assert extra_by_id["util-viewport-export"]["action"] == "toggle_viewport_export"
+    assert extra_by_id["util-viewport-export"]["icon_src"] == "../icon/sequencer/export.png"
+    assert extra_by_id["util-viewport-export"]["tooltip_text"] == "Export"
+    assert extra_by_id["util-viewport-export"]["selected"] is False
+    assert extra_by_id["util-asset-manager"]["action"] == "toggle_panel"
+    assert extra_by_id["util-asset-manager"]["value"] == "lfs.asset_manager"
+    assert extra_by_id["util-asset-manager"]["icon_src"] == "../icon/archive.png"
+    assert extra_by_id["util-asset-manager"]["tooltip_text"] == "Assets"
+    assert extra_by_id["util-asset-manager"]["selected"] is True
+    assert extra_by_id["util-plugin-marketplace"]["action"] == "toggle_panel"
+    assert extra_by_id["util-plugin-marketplace"]["value"] == "lfs.plugin_marketplace"
+    assert extra_by_id["util-plugin-marketplace"]["icon_src"] == "../icon/puzzle.png"
+    assert extra_by_id["util-plugin-marketplace"]["tooltip_text"] == "Plugins"
+    assert extra_by_id["util-plugin-marketplace"]["selected"] is True
     assert render_group["action"] == "render_group"
     assert render_group["icon_src"] == "../icon/blob.png"
     assert render_group["selected"] is False
@@ -859,8 +982,123 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
 
     assert panel_enabled["lfs.plugin_marketplace"] is False
     extra_buttons = model.handle.record_updates["utility_extra_buttons"]
-    assert extra_buttons[2]["button_id"] == "util-plugin-marketplace"
-    assert extra_buttons[2]["selected"] is False
+    extra_by_id = {button["button_id"]: button for button in extra_buttons}
+    assert extra_by_id["util-plugin-marketplace"]["selected"] is False
+
+    model.handle.record_updates.clear()
+    model.bound_events["toolbar_action"](None, None, ["toggle_viewport_export", ""])
+
+    extra_buttons = model.handle.record_updates["utility_extra_buttons"]
+    extra_by_id = {button["button_id"]: button for button in extra_buttons}
+    assert extra_by_id["util-viewport-export"]["selected"] is True
+
+
+def test_viewport_export_toolbar_action_shows_overlay_immediately(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    model = _DataModelStub()
+    doc = _DocumentStub()
+    lf_stub = sys.modules["lichtfeld"]
+    redraw_calls = []
+
+    lf_stub.RenderMode = SimpleNamespace(
+        SPLATS="splats",
+        POINTS="points",
+        RINGS="rings",
+        CENTERS="centers",
+    )
+    lf_stub.get_camera_navigation_mode = lambda: "orbit"
+    lf_stub.get_camera_view_snap_enabled = lambda: False
+    lf_stub.get_render_mode = lambda: lf_stub.RenderMode.SPLATS
+    lf_stub.is_fullscreen = lambda: False
+    lf_stub.is_orthographic = lambda: False
+    lf_stub.get_depth_view = lambda: False
+    lf_stub.get_selected_node_names = lambda: []
+    monkeypatch.setattr(lf_stub.ui, "context", lambda: SimpleNamespace(has_scene=True), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: "", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_transform_space", lambda: 1, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_pivot_mode", lambda: 0, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_split_view_mode", lambda: "single", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "is_sequencer_visible", lambda: False, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "is_panel_enabled", lambda _panel_id: False, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "request_redraw", lambda: redraw_calls.append(True), raising=False)
+    monkeypatch.setattr(module, "histogram_mode_available", lambda _context: False)
+
+    module.reset_overlay_state()
+    module.bind_overlay_model(model)
+    module.attach_overlay_model_handle(model.handle)
+    module._toolbar_controller._current_doc = doc
+
+    assert "hidden" in doc.elements["viewport-export-block"].classes
+
+    model.bound_events["toolbar_action"](None, None, ["toggle_viewport_export", ""])
+
+    assert "hidden" not in doc.elements["viewport-export-block"].classes
+    assert "hidden" in doc.elements["depth-view-block"].classes
+    assert "hidden" in doc.elements["selection-block"].classes
+    assert "hidden" in doc.elements["transform-block"].classes
+    assert redraw_calls
+
+
+def test_viewport_export_status_animates_then_hides(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    export_module = sys.modules["lfs_plugins.viewport_export_controls"]
+    timers = _install_timer_stub(export_module, monkeypatch)
+    model = _DataModelStub()
+    doc = _DocumentStub()
+
+    module.reset_overlay_state()
+    module.bind_overlay_model(model)
+    module.attach_overlay_model_handle(model.handle)
+    controller = module._toolbar_controller._viewport_export_controls
+    controller.mount(doc)
+
+    controller._set_status("Saved 9215 x 6480")
+
+    toast = doc.elements["viewport-export-status"]
+    assert "hidden" not in toast.classes
+    assert toast.text == "Saved 9215 x 6480"
+    assert toast.properties["opacity"] == "1"
+    assert toast.animations[-1] == ("opacity", "0", 1.95, "quadratic-out", "1", False)
+    assert len(timers) == 1
+    assert timers[-1].started
+    assert timers[-1].daemon is True
+
+    toast.listeners["animationend"][-1](SimpleNamespace())
+
+    assert "hidden" in toast.classes
+    assert "opacity" not in toast.properties
+    assert timers[-1].cancelled
+    assert "viewport_export_status_text" in model.handle.dirty_calls
+
+
+def test_viewport_export_status_expires_without_animation_event(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    export_module = sys.modules["lfs_plugins.viewport_export_controls"]
+    timers = _install_timer_stub(export_module, monkeypatch)
+    now = [100.0]
+    monkeypatch.setattr(export_module.time, "monotonic", lambda: now[0])
+    model = _DataModelStub()
+    doc = _DocumentStub()
+
+    module.reset_overlay_state()
+    module.bind_overlay_model(model)
+    module.attach_overlay_model_handle(model.handle)
+    controller = module._toolbar_controller._viewport_export_controls
+    controller.mount(doc)
+
+    controller._set_status("Saved 9215 x 6480")
+
+    toast = doc.elements["viewport-export-status"]
+    assert "hidden" not in toast.classes
+    assert timers[-1].delay == pytest.approx(2.0)
+
+    now[0] += 2.0
+    dirty = controller.update(doc)
+
+    assert "status-expired" in dirty
+    assert "hidden" in toast.classes
+    assert "opacity" not in toast.properties
+    assert timers[-1].cancelled
 
 
 def test_toolbar_tool_action_refreshes_button_records_immediately(toolbar_module, monkeypatch):

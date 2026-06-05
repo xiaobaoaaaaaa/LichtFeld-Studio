@@ -1231,6 +1231,22 @@ def capture_viewport() -> ViewportRender | None:
     Capture viewport render explicitly (may read back from GPU; clones data, safe to use from background threads)
     """
 
+def export_viewport_image(path: str, format: str = '', width: int = 0, height: int = 0, transparent: bool = False, jpeg_quality: int = 95) -> dict:
+    """
+    Export the active viewport image to PNG or JPEG.
+
+    Args:
+        path: Output path. The selected format extension is enforced when needed.
+        format: 'png', 'jpg', or empty to infer from path.
+        width: Target width in pixels. If zero with a positive height, preserves viewport aspect.
+        height: Target height in pixels. If both dimensions are zero, captures the current viewport.
+        transparent: For PNG only, export straight RGBA from the preview renderer.
+        jpeg_quality: JPEG compression quality in [1, 100].
+
+    Returns:
+        Dict with path, width, height, channels, format, and transparent.
+    """
+
 def render_view(rotation: Tensor, translation: Tensor, width: int, height: int, fov: float = 60.0, bg_color: Tensor | None = None) -> Tensor | None:
     """
     Render scene from arbitrary camera parameters.
@@ -1247,7 +1263,7 @@ def render_view(rotation: Tensor, translation: Tensor, width: int, height: int, 
         CPU Tensor [H, W, 3] RGB image, or None if no active visualizer scene is available
     """
 
-def render_view_u8(rotation: Tensor, translation: Tensor, width: int, height: int, fov: float = 60.0, bg_color: Tensor | None = None) -> Tensor | None:
+def render_view_u8(rotation: Tensor, translation: Tensor, width: int, height: int, fov: float = 60.0, bg_color: Tensor | None = None, orthographic: bool | None = None, ortho_scale: float | None = None) -> Tensor | None:
     """
     Render scene from arbitrary camera parameters as an 8-bit RGB image.
 
@@ -1258,6 +1274,8 @@ def render_view_u8(rotation: Tensor, translation: Tensor, width: int, height: in
         height: Render height in pixels
         fov: Vertical field of view in degrees (default: 60)
         bg_color: Accepted for compatibility; the Vulkan preview path uses current render settings
+        orthographic: Optional projection override. None uses current render settings.
+        ortho_scale: Optional orthographic pixels-per-world-unit override.
 
     Returns:
         CPU uint8 Tensor [H, W, 3] RGB image, or None if no active visualizer scene is available

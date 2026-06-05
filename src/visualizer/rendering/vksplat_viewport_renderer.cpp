@@ -3346,6 +3346,28 @@ namespace lfs::vis {
         return std::make_shared<lfs::core::Tensor>(std::move(tensor));
     }
 
+    std::expected<std::shared_ptr<lfs::core::Tensor>, std::string>
+    VksplatViewportRenderer::readOutputImageRgba8(VulkanContext& context, const OutputSlot output_slot) const {
+        const auto size = latestOutputImageSize(output_slot);
+        if (!size) {
+            return std::unexpected(size.error());
+        }
+
+        auto tensor = lfs::core::Tensor::empty(
+            {static_cast<std::size_t>(size->y), static_cast<std::size_t>(size->x), std::size_t{4}},
+            lfs::core::Device::CPU,
+            lfs::core::DataType::UInt8);
+        if (!tensor.is_valid()) {
+            return std::unexpected("VkSplat output readback failed to allocate CPU uint8 RGBA tensor");
+        }
+
+        auto ok = readOutputImageIntoCpuHwc(context, output_slot, tensor, 0, 0);
+        if (!ok) {
+            return std::unexpected(ok.error());
+        }
+        return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+    }
+
     std::expected<void, std::string> VksplatViewportRenderer::readOutputImageIntoCpuHwc(
         VulkanContext& context,
         const OutputSlot output_slot,
@@ -3355,13 +3377,13 @@ namespace lfs::vis {
         if (!destination.is_valid() ||
             destination.device() != lfs::core::Device::CPU ||
             destination.ndim() != 3 ||
-            destination.size(2) != 3 ||
+            (destination.size(2) != 3 && destination.size(2) != 4) ||
             !destination.is_contiguous()) {
-            return std::unexpected("VkSplat output readback destination must be a contiguous CPU HWC RGB tensor");
+            return std::unexpected("VkSplat output readback destination must be a contiguous CPU HWC RGB/RGBA tensor");
         }
         if (destination.dtype() != lfs::core::DataType::Float32 &&
             destination.dtype() != lfs::core::DataType::UInt8) {
-            return std::unexpected("VkSplat output readback destination must be float32 or uint8 RGB");
+            return std::unexpected("VkSplat output readback destination must be float32 or uint8 RGB/RGBA");
         }
         if (destination_x < 0 || destination_y < 0) {
             return std::unexpected("VkSplat output readback destination offset is negative");
@@ -3526,6 +3548,7 @@ namespace lfs::vis {
 
         const std::size_t src_row_pixels = static_cast<std::size_t>(output.size.x);
         const std::size_t dst_row_pixels = static_cast<std::size_t>(destination_width);
+        const std::size_t dst_channels = static_cast<std::size_t>(destination.size(2));
         if (destination.dtype() == lfs::core::DataType::Float32) {
             auto* const dst = static_cast<float*>(destination_data);
             for (int row = 0; row < output.size.y; ++row) {
@@ -3533,13 +3556,16 @@ namespace lfs::vis {
                 auto* const dst_row =
                     dst + ((static_cast<std::size_t>(destination_y + row) * dst_row_pixels +
                             static_cast<std::size_t>(destination_x)) *
-                           3u);
+                           dst_channels);
                 for (int col = 0; col < output.size.x; ++col) {
                     const std::size_t src = static_cast<std::size_t>(col) * 4u;
-                    const std::size_t dst_index = static_cast<std::size_t>(col) * 3u;
+                    const std::size_t dst_index = static_cast<std::size_t>(col) * dst_channels;
                     dst_row[dst_index] = static_cast<float>(src_row[src]) / 255.0f;
                     dst_row[dst_index + 1u] = static_cast<float>(src_row[src + 1u]) / 255.0f;
                     dst_row[dst_index + 2u] = static_cast<float>(src_row[src + 2u]) / 255.0f;
+                    if (dst_channels == 4u) {
+                        dst_row[dst_index + 3u] = static_cast<float>(src_row[src + 3u]) / 255.0f;
+                    }
                 }
             }
         } else {
@@ -3549,13 +3575,16 @@ namespace lfs::vis {
                 auto* const dst_row =
                     dst + ((static_cast<std::size_t>(destination_y + row) * dst_row_pixels +
                             static_cast<std::size_t>(destination_x)) *
-                           3u);
+                           dst_channels);
                 for (int col = 0; col < output.size.x; ++col) {
                     const std::size_t src = static_cast<std::size_t>(col) * 4u;
-                    const std::size_t dst_index = static_cast<std::size_t>(col) * 3u;
+                    const std::size_t dst_index = static_cast<std::size_t>(col) * dst_channels;
                     dst_row[dst_index] = src_row[src];
                     dst_row[dst_index + 1u] = src_row[src + 1u];
                     dst_row[dst_index + 2u] = src_row[src + 2u];
+                    if (dst_channels == 4u) {
+                        dst_row[dst_index + 3u] = src_row[src + 3u];
+                    }
                 }
             }
         }

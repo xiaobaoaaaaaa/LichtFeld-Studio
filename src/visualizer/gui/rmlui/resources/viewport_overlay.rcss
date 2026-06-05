@@ -291,6 +291,39 @@ body {
     min-width: 624dp;
 }
 
+.viewport-transform-panel.viewport-export-panel {
+    width: 470dp;
+    min-width: 470dp;
+    max-width: 470dp;
+    padding: 6dp 8dp;
+    gap: 4dp;
+    box-sizing: border-box;
+}
+
+.viewport-transform-panel.viewport-export-panel.has-custom {
+    width: 624dp;
+    min-width: 624dp;
+    max-width: 624dp;
+}
+
+.viewport-transform-panel.viewport-export-panel.has-alpha {
+    width: 532dp;
+    min-width: 532dp;
+    max-width: 532dp;
+}
+
+.viewport-transform-panel.viewport-export-panel.has-custom.has-alpha {
+    width: 686dp;
+    min-width: 686dp;
+    max-width: 686dp;
+}
+
+.viewport-export-overlay {
+    flex-direction: column;
+    align-items: center;
+    gap: 5dp;
+}
+
 .viewport-transform-header {
     display: flex;
     align-items: center;
@@ -357,6 +390,185 @@ body {
 .viewport-transform-option img {
     width: 18dp;
     height: 18dp;
+}
+
+.viewport-export-fields {
+    display: flex;
+    align-items: center;
+    gap: 8dp;
+    height: 26dp;
+    min-height: 26dp;
+    flex-shrink: 0;
+    flex-wrap: nowrap;
+}
+
+.viewport-export-axis {
+    display: flex;
+    align-items: center;
+    gap: 6dp;
+    height: 26dp;
+    min-height: 26dp;
+    flex-shrink: 0;
+}
+
+.viewport-export-header {
+    flex-wrap: nowrap;
+    align-items: center;
+    min-height: 26dp;
+}
+
+.viewport-transform-meta.viewport-export-meta {
+    width: 171dp;
+    min-width: 171dp;
+    max-width: 171dp;
+    flex-direction: row;
+    align-items: center;
+    gap: 6dp;
+    flex-grow: 0;
+    flex-shrink: 0;
+    min-height: 26dp;
+}
+
+.viewport-transform-meta.viewport-export-meta .viewport-transform-meta__tool {
+    font-size: 12dp;
+    line-height: 26dp;
+    white-space: nowrap;
+}
+
+.viewport-export-axis > .viewport-transform-axis-label {
+    width: 64dp;
+    min-width: 64dp;
+    font-size: 12dp;
+    line-height: 26dp;
+    text-align: left;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.viewport-export-resolution-select,
+.viewport-export-format-select {
+    height: 26dp;
+    min-height: 26dp;
+    font-size: 12dp;
+    line-height: 24dp;
+    padding: 0;
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.viewport-export-resolution-select {
+    width: 102dp;
+    min-width: 102dp;
+}
+
+.viewport-export-format-select {
+    width: 74dp;
+    min-width: 74dp;
+}
+
+.viewport-export-resolution-select selectvalue,
+.viewport-export-format-select selectvalue {
+    height: 24dp;
+    line-height: 24dp;
+    margin-right: 20dp;
+    padding: 0 0 0 8dp;
+    position: relative;
+    top: 0;
+}
+
+.viewport-export-resolution-select selectarrow,
+.viewport-export-format-select selectarrow {
+    width: 20dp;
+    height: 24dp;
+    line-height: 24dp;
+    position: relative;
+    top: 0;
+}
+
+.viewport-export-custom-size {
+    display: flex;
+    align-items: center;
+    gap: 5dp;
+    height: 26dp;
+    min-height: 26dp;
+    flex-shrink: 0;
+}
+
+.viewport-export-custom-size.hidden {
+    display: none;
+}
+
+.viewport-export-size-input {
+    width: 64dp;
+    min-width: 64dp;
+    height: 24dp;
+    min-height: 24dp;
+    font-size: 12dp;
+    line-height: 16dp;
+    padding: 3dp 6dp;
+    flex-shrink: 0;
+    text-align: right;
+    box-sizing: border-box;
+}
+
+.viewport-export-size-separator {
+    width: 8dp;
+    min-width: 8dp;
+    font-size: 12dp;
+    line-height: 26dp;
+    height: 26dp;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.viewport-export-transparency {
+    display: flex;
+    align-items: center;
+    gap: 4dp;
+    height: 26dp;
+    min-height: 26dp;
+    font-size: 12dp;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.viewport-export-transparency.hidden {
+    display: none;
+}
+
+.viewport-export-actions {
+    height: 26dp;
+    min-height: 26dp;
+    flex-shrink: 0;
+}
+
+.viewport-export-button {
+    width: 66dp;
+    min-width: 66dp;
+    height: 26dp;
+    min-height: 26dp;
+    padding: 0;
+    font-size: 12dp;
+    line-height: 24dp;
+    box-sizing: border-box;
+    flex-shrink: 0;
+}
+
+.viewport-export-status {
+    pointer-events: none;
+    max-width: 360dp;
+    min-height: 22dp;
+    padding: 4dp 10dp;
+    border-width: 1dp;
+    border-radius: 6dp;
+    font-size: 11dp;
+    line-height: 14dp;
+    white-space: nowrap;
+    opacity: 1;
+}
+
+.viewport-export-status.hidden {
+    display: none;
 }
 
 .viewport-transform-fields {

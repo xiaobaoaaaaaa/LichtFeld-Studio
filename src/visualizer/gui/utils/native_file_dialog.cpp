@@ -666,6 +666,28 @@ namespace lfs::vis::gui {
         return result;
     }
 
+    std::filesystem::path SavePngFileDialog(const std::string& defaultName,
+                                            const std::filesystem::path& defaultPath) {
+        std::filesystem::path result;
+        runDialog(makeSaveFileRequest(singleExtensionFilter("PNG Image", ".png"),
+                                      defaultPath,
+                                      defaultName,
+                                      ".png"),
+                  result);
+        return result;
+    }
+
+    std::filesystem::path SaveJpgFileDialog(const std::string& defaultName,
+                                            const std::filesystem::path& defaultPath) {
+        std::filesystem::path result;
+        runDialog(makeSaveFileRequest(singleExtensionFilter("JPEG Image", ".jpg"),
+                                      defaultPath,
+                                      defaultName,
+                                      ".jpg"),
+                  result);
+        return result;
+    }
+
     std::filesystem::path SaveTextFileDialog(const std::string& defaultName,
                                              const std::filesystem::path& defaultPath) {
         std::filesystem::path result;

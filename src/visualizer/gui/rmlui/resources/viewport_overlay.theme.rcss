@@ -27,6 +27,12 @@
     border-color: @{overlay.border};
 }
 
+.viewport-export-status {
+    background-color: @{toolbar.background};
+    border-color: @{overlay.border};
+    color: @{text};
+}
+
 .viewport-transform-meta__tool,
 .viewport-transform-axis-label {
     color: @{text};

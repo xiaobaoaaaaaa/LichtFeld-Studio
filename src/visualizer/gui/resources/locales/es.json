@@ -71,6 +71,7 @@
     "fullscreen": "Pantalla completa",
     "toggle_ui": "Alternar interfaz",
     "asset_manager": "Gestor de Activos",
+    "viewport_export": "Exportar vista",
     "local_space": "Espacio local",
     "world_space": "Espacio mundial",
     "origin_pivot": "Origen",
@@ -238,7 +239,14 @@
     "depth_view_range": "Rango de visualización de profundidad",
     "depth_view_near": "Límite cercano del rango de profundidad",
     "depth_view_far": "Límite lejano del rango de profundidad",
-    "depth_view_close": "Desactivar la vista de profundidad"
+    "depth_view_close": "Desactivar la vista de profundidad",
+    "viewport_export_panel": "Controles de exportación de la vista",
+    "viewport_export_tool": "Exportar imagen de la vista",
+    "viewport_export_format": "Elegir PNG o JPEG",
+    "viewport_export_settings": "Ajustes de exportación de la vista",
+    "viewport_export_resolution": "Elegir resolución de exportación",
+    "viewport_export_transparency": "Exportar PNG con alfa",
+    "viewport_export_close": "Cerrar exportación de la vista"
   },
   "about": {
     "title": "LICHTFELD STUDIO",
