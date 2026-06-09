@@ -3,16 +3,17 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "rad.hpp"
+#include "core/bhatt_lod.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data_transform.hpp"
-#include "core/splat_simplify.hpp"
 #include "core/tensor.hpp"
 #include "io/atomic_output.hpp"
 #include "io/error.hpp"
-#include "nanoflann.hpp"
 
 #include <nlohmann/json.hpp>
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
 #include <zlib.h>
 
 #include <algorithm>
@@ -25,18 +26,14 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
-#ifdef _OPENMP
-#include <omp.h>
-#endif
-
 namespace lfs::io {
 
-    using lfs::core::DataType;
     using lfs::core::Device;
     using lfs::core::SplatData;
     using lfs::core::Tensor;
@@ -120,10 +117,6 @@ namespace lfs::io {
         constexpr const char* PROP_SH3 = "sh3";
         constexpr const char* PROP_CHILD_COUNT = "child_count";
         constexpr const char* PROP_CHILD_START = "child_start";
-        constexpr const char* PROP_SH1_CODE = "sh1_code";
-        constexpr const char* PROP_SH2_CODE = "sh2_code";
-        constexpr const char* PROP_SH3_CODE = "sh3_code";
-        constexpr const char* PROP_SH_LABEL = "sh_label";
 
         // ============================================================================
         // Utility Functions
@@ -780,16 +773,16 @@ namespace lfs::io {
         //   3. Extract axis: if sin(theta/2) > epsilon, axis = (x,y,z) / sin(theta/2), else use (1,0,0)
         //   4. Encode axis to octahedral (2 bytes)
         //   5. Encode angle to 1 byte: theta / PI * 255
-        std::vector<uint8_t> encode_quat_oct88r8(const float* quats, size_t count) {
+        std::vector<uint8_t> encode_quat_oct88r8(const float* quats, size_t count, bool input_wxyz = false) {
             std::vector<uint8_t> result(count * 3);
             constexpr float PI = 3.14159265358979323846f;
             constexpr float EPSILON = 1e-6f;
 
             for (size_t i = 0; i < count; ++i) {
-                float x = quats[i * 4 + 0];
-                float y = quats[i * 4 + 1];
-                float z = quats[i * 4 + 2];
-                float w = quats[i * 4 + 3];
+                float x = input_wxyz ? quats[i * 4 + 1] : quats[i * 4 + 0];
+                float y = input_wxyz ? quats[i * 4 + 2] : quats[i * 4 + 1];
+                float z = input_wxyz ? quats[i * 4 + 3] : quats[i * 4 + 2];
+                float w = input_wxyz ? quats[i * 4 + 0] : quats[i * 4 + 3];
 
                 // Normalize
                 float len = std::sqrt(x * x + y * y + z * z + w * w);
@@ -888,7 +881,6 @@ namespace lfs::io {
                     float temp_x = oct_x;
                     oct_x = (1.0f - std::abs(oct_y)) * (oct_x >= 0.0f ? 1.0f : -1.0f);
                     oct_y = (1.0f - std::abs(temp_x)) * (oct_y >= 0.0f ? 1.0f : -1.0f);
-                    oct_z = -oct_z;
                 }
 
                 // Project from octahedron to sphere (normalize)
@@ -1199,8 +1191,9 @@ namespace lfs::io {
                 return result;
             }
 
-            static EncodedProperty encode_alpha(const float* data, size_t count, RadAlphaEncoding encoding) {
+            static EncodedProperty encode_alpha(const float* data, size_t count, RadAlphaEncoding encoding, bool lod_tree) {
                 EncodedProperty result;
+                const float max_encoded_alpha = lod_tree ? 2.0f : 1.0f;
 
                 switch (encoding) {
                 case RadAlphaEncoding::F32:
@@ -1216,7 +1209,7 @@ namespace lfs::io {
                     break;
 
                 case RadAlphaEncoding::R8: {
-                    auto r8_result = encode_r8(data, 1, count, 0.0f, 1.0f);
+                    auto r8_result = encode_r8(data, 1, count, 0.0f, max_encoded_alpha);
                     result.data = std::move(r8_result.data);
                     result.min_val = r8_result.min_val;
                     result.max_val = r8_result.max_val;
@@ -1233,7 +1226,7 @@ namespace lfs::io {
                         result.data = encode_f16(data, 1, count);
                         result.encoding = "f16";
                     } else {
-                        auto r8_result = encode_r8(data, 1, count, 0.0f, 1.0f);
+                        auto r8_result = encode_r8(data, 1, count, 0.0f, max_encoded_alpha);
                         result.data = std::move(r8_result.data);
                         result.min_val = r8_result.min_val;
                         result.max_val = r8_result.max_val;
@@ -1542,6 +1535,292 @@ namespace lfs::io {
             }
         };
 
+        std::expected<RadDecodedChunk, std::string> decode_rad_chunk_buffer(
+            const std::vector<uint8_t>& data,
+            int fallback_max_sh,
+            const bool has_lod_tree,
+            bool lod_opacity_encoded) {
+            if (data.size() < 8) {
+                return std::unexpected("RAD chunk too small");
+            }
+
+            std::size_t offset = 0;
+            const uint32_t chunk_magic = decode_u32(&data[offset]);
+            if (chunk_magic != RAD_CHUNK_MAGIC) {
+                return std::unexpected("Invalid RAD chunk magic");
+            }
+
+            const uint32_t chunk_meta_size = decode_u32(&data[offset + 4]);
+            const std::size_t chunk_meta_padded = pad8(chunk_meta_size);
+            if (offset + 8 + chunk_meta_padded + 8 > data.size()) {
+                return std::unexpected("Unexpected end of RAD chunk metadata");
+            }
+
+            RadChunkMeta chunk;
+            try {
+                std::string chunk_json(reinterpret_cast<const char*>(&data[offset + 8]), chunk_meta_size);
+                chunk = RadChunkMeta::from_json(nlohmann::json::parse(chunk_json));
+            } catch (const std::exception& e) {
+                return std::unexpected(std::string("Failed to parse RAD chunk metadata: ") + e.what());
+            }
+
+            const std::size_t payload_size_offset = offset + 8 + chunk_meta_padded;
+            bool has_payload_prefix = false;
+            std::size_t payload_start = payload_size_offset;
+            std::size_t chunk_end = 0;
+            if (payload_size_offset + 8 <= data.size()) {
+                const uint64_t payload_bytes = decode_u64(&data[payload_size_offset]);
+                payload_start = payload_size_offset + 8;
+                chunk_end = payload_start + static_cast<std::size_t>(payload_bytes);
+                has_payload_prefix = (chunk_end <= data.size()) && (chunk.payload_bytes == payload_bytes);
+            }
+
+            if (!has_payload_prefix) {
+                payload_start = offset;
+                chunk_end = offset + pad8(static_cast<std::size_t>(chunk.payload_bytes));
+                if (chunk_end > data.size()) {
+                    return std::unexpected("RAD chunk payload exceeds file bounds");
+                }
+            }
+
+            if (chunk.splat_encoding.has_value()) {
+                const auto& enc = chunk.splat_encoding.value();
+                if (enc.is_object()) {
+                    const auto it = enc.find("lodOpacity");
+                    if (it != enc.end() && it->is_boolean()) {
+                        lod_opacity_encoded = it->get<bool>();
+                    }
+                }
+            }
+
+            int max_sh = chunk.max_sh > 0 ? chunk.max_sh : fallback_max_sh;
+            max_sh = std::clamp(max_sh, 0, 3);
+            const int sh_coeffs = max_sh > 0 ? SH_COEFFS_FOR_DEGREE[max_sh] : 0;
+            const std::size_t chunk_count = static_cast<std::size_t>(chunk.count);
+            const bool decode_tree = has_lod_tree || chunk.lod_tree;
+
+            std::vector<float> chunk_means(chunk_count * 3u);
+            std::vector<float> chunk_opacity(chunk_count);
+            std::vector<float> chunk_sh0(chunk_count * 3u);
+            std::vector<float> chunk_scales(chunk_count * 3u);
+            std::vector<float> chunk_rotation(chunk_count * 4u);
+            std::vector<float> chunk_shN(chunk_count * static_cast<std::size_t>(sh_coeffs) * 3u, 0.0f);
+            std::vector<uint16_t> chunk_child_count;
+            std::vector<uint32_t> chunk_child_start;
+            if (decode_tree) {
+                chunk_child_count.resize(chunk_count);
+                chunk_child_start.resize(chunk_count);
+            }
+
+            std::vector<float> comp_data(chunk_count);
+
+            try {
+                for (const auto& prop : chunk.properties) {
+                    const std::size_t prop_offset = static_cast<std::size_t>(prop.offset);
+                    const std::size_t prop_bytes = static_cast<std::size_t>(prop.bytes);
+                    const std::size_t absolute_offset =
+                        has_payload_prefix ? (payload_start + prop_offset) : (offset + prop_offset);
+                    if (absolute_offset + prop_bytes > chunk_end) {
+                        return std::unexpected("RAD chunk property data exceeds file bounds");
+                    }
+
+                    std::vector<uint8_t> prop_data;
+                    if (prop.compression.has_value() &&
+                        (prop.compression.value() == "gz" || prop.compression.value() == "gzip")) {
+                        prop_data = rad_decompress(&data[absolute_offset], prop_bytes);
+                        if (prop_data.empty()) {
+                            return std::unexpected("Failed to decompress RAD chunk property: " + prop.property);
+                        }
+                    } else {
+                        prop_data.assign(&data[absolute_offset], &data[absolute_offset + prop_bytes]);
+                    }
+
+                    if (prop.property == PROP_CENTER) {
+                        PropertyDecoder::decode_center(prop_data.data(), chunk_means.data(), 3, chunk_count, prop.encoding);
+                    } else if (prop.property.find(PROP_CENTER) == 0 && prop.property != PROP_CENTER) {
+                        const int comp = prop.property.back() - '0';
+                        PropertyDecoder::decode_center(prop_data.data(), comp_data.data(), 1, chunk_count, prop.encoding);
+                        for (std::size_t i = 0; i < chunk_count; ++i) {
+                            chunk_means[i * 3u + static_cast<std::size_t>(comp)] = comp_data[i];
+                        }
+                    } else if (prop.property == PROP_ALPHA) {
+                        PropertyDecoder::decode_alpha(prop_data.data(),
+                                                      chunk_opacity.data(),
+                                                      chunk_count,
+                                                      prop.encoding,
+                                                      prop.min_val.value_or(0.0f),
+                                                      prop.max_val.value_or(1.0f));
+                    } else if (prop.property == PROP_RGB) {
+                        PropertyDecoder::decode_rgb(prop_data.data(),
+                                                    chunk_sh0.data(),
+                                                    3,
+                                                    chunk_count,
+                                                    prop.encoding,
+                                                    prop.min_val.value_or(0.0f),
+                                                    prop.max_val.value_or(1.0f),
+                                                    prop.base.value_or(0.0f),
+                                                    prop.scale.value_or(1.0f));
+                    } else if (prop.property.find(PROP_RGB) == 0 && prop.property != PROP_RGB) {
+                        const int comp = prop.property.back() - '0';
+                        PropertyDecoder::decode_rgb(prop_data.data(),
+                                                    comp_data.data(),
+                                                    1,
+                                                    chunk_count,
+                                                    prop.encoding,
+                                                    prop.min_val.value_or(0.0f),
+                                                    prop.max_val.value_or(1.0f),
+                                                    prop.base.value_or(0.0f),
+                                                    prop.scale.value_or(1.0f));
+                        for (std::size_t i = 0; i < chunk_count; ++i) {
+                            chunk_sh0[i * 3u + static_cast<std::size_t>(comp)] = comp_data[i];
+                        }
+                    } else if (prop.property == PROP_SCALES) {
+                        PropertyDecoder::decode_scales(prop_data.data(),
+                                                       chunk_scales.data(),
+                                                       3,
+                                                       chunk_count,
+                                                       prop.encoding,
+                                                       prop.min_val.value_or(0.0f),
+                                                       prop.max_val.value_or(prop.scale.value_or(1.0f)));
+                    } else if (prop.property.find(PROP_SCALES) == 0 && prop.property != PROP_SCALES) {
+                        const int comp = prop.property.back() - '0';
+                        PropertyDecoder::decode_scales(prop_data.data(),
+                                                       comp_data.data(),
+                                                       1,
+                                                       chunk_count,
+                                                       prop.encoding,
+                                                       prop.min_val.value_or(0.0f),
+                                                       prop.max_val.value_or(prop.scale.value_or(1.0f)));
+                        for (std::size_t i = 0; i < chunk_count; ++i) {
+                            chunk_scales[i * 3u + static_cast<std::size_t>(comp)] = comp_data[i];
+                        }
+                    } else if (prop.property == PROP_ORIENTATION) {
+                        std::vector<float> quat_data(chunk_count * 4u);
+                        PropertyDecoder::decode_orientation(prop_data.data(), quat_data.data(), chunk_count, prop.encoding);
+                        for (std::size_t i = 0; i < chunk_count; ++i) {
+                            chunk_rotation[i * 4u + 0u] = quat_data[i * 4u + 3u];
+                            chunk_rotation[i * 4u + 1u] = quat_data[i * 4u + 0u];
+                            chunk_rotation[i * 4u + 2u] = quat_data[i * 4u + 1u];
+                            chunk_rotation[i * 4u + 3u] = quat_data[i * 4u + 2u];
+                        }
+                    } else if ((prop.property == PROP_SH1 || prop.property == PROP_SH2 || prop.property == PROP_SH3) &&
+                               sh_coeffs > 0) {
+                        int coeff_start = 0;
+                        int coeff_count = 0;
+                        if (prop.property == PROP_SH1) {
+                            coeff_start = 0;
+                            coeff_count = 3;
+                        } else if (prop.property == PROP_SH2) {
+                            coeff_start = 3;
+                            coeff_count = 5;
+                        } else {
+                            coeff_start = 8;
+                            coeff_count = 7;
+                        }
+
+                        const std::size_t dims = static_cast<std::size_t>(coeff_count) * 3u;
+                        std::vector<float> sh_block(chunk_count * dims, 0.0f);
+                        PropertyDecoder::decode_sh(prop_data.data(),
+                                                   sh_block.data(),
+                                                   dims,
+                                                   chunk_count,
+                                                   prop.encoding,
+                                                   prop.min_val.value_or(0.0f),
+                                                   prop.max_val.value_or(1.0f),
+                                                   prop.base.value_or(0.0f),
+                                                   prop.scale.value_or(1.0f));
+
+                        for (std::size_t i = 0; i < chunk_count; ++i) {
+                            for (int c = 0; c < coeff_count; ++c) {
+                                const int coeff = coeff_start + c;
+                                if (coeff >= sh_coeffs) {
+                                    continue;
+                                }
+                                for (int ch = 0; ch < 3; ++ch) {
+                                    chunk_shN[i * static_cast<std::size_t>(sh_coeffs) * 3u +
+                                              static_cast<std::size_t>(coeff) * 3u +
+                                              static_cast<std::size_t>(ch)] =
+                                        sh_block[i * dims + static_cast<std::size_t>(c) * 3u +
+                                                 static_cast<std::size_t>(ch)];
+                                }
+                            }
+                        }
+                    } else if (prop.property.find("sh") == 0 && sh_coeffs > 0) {
+                        const std::size_t first_underscore = prop.property.find('_');
+                        const std::size_t second_underscore = prop.property.find('_', first_underscore + 1);
+                        if (first_underscore != std::string::npos && second_underscore != std::string::npos) {
+                            const int coeff = std::stoi(prop.property.substr(first_underscore + 1,
+                                                                             second_underscore - first_underscore - 1));
+                            const int ch = prop.property.back() - '0';
+                            if (coeff >= 0 && coeff < sh_coeffs && ch >= 0 && ch < 3) {
+                                PropertyDecoder::decode_sh(prop_data.data(),
+                                                           comp_data.data(),
+                                                           1,
+                                                           chunk_count,
+                                                           prop.encoding,
+                                                           prop.min_val.value_or(0.0f),
+                                                           prop.max_val.value_or(1.0f),
+                                                           prop.base.value_or(0.0f),
+                                                           prop.scale.value_or(1.0f));
+                                for (std::size_t i = 0; i < chunk_count; ++i) {
+                                    chunk_shN[i * static_cast<std::size_t>(sh_coeffs) * 3u +
+                                              static_cast<std::size_t>(coeff) * 3u +
+                                              static_cast<std::size_t>(ch)] = comp_data[i];
+                                }
+                            }
+                        }
+                    } else if (prop.property == PROP_CHILD_COUNT && decode_tree) {
+                        if (prop_data.size() >= chunk_count * 2u) {
+                            for (std::size_t i = 0; i < chunk_count; ++i) {
+                                chunk_child_count[i] = decode_u16(&prop_data[i * 2u]);
+                            }
+                        }
+                    } else if (prop.property == PROP_CHILD_START && decode_tree) {
+                        if (prop_data.size() >= chunk_count * 4u) {
+                            for (std::size_t i = 0; i < chunk_count; ++i) {
+                                chunk_child_start[i] = decode_u32(&prop_data[i * 4u]);
+                            }
+                        }
+                    }
+                }
+            } catch (const std::exception& e) {
+                return std::unexpected(std::string("Failed to decode RAD chunk: ") + e.what());
+            }
+
+            for (float& v : chunk_sh0) {
+                v = (v - 0.5f) / SH_C0;
+            }
+            if (!lod_opacity_encoded) {
+                for (float& v : chunk_opacity) {
+                    const float a = std::clamp(v, 1.0e-6f, 1.0f - 1.0e-6f);
+                    v = std::log(a / (1.0f - a));
+                }
+            } else {
+                for (float& v : chunk_opacity) {
+                    v = std::max(v, 0.0f);
+                }
+            }
+            for (float& v : chunk_scales) {
+                v = std::log(std::max(v, 1.0e-8f));
+            }
+
+            return RadDecodedChunk{
+                .base = chunk.base,
+                .count = chunk.count,
+                .max_sh_degree = max_sh,
+                .sh_coeffs_rest = static_cast<std::uint32_t>(sh_coeffs),
+                .lod_opacity_encoded = lod_opacity_encoded,
+                .means = std::move(chunk_means),
+                .opacity_raw = std::move(chunk_opacity),
+                .sh0_raw = std::move(chunk_sh0),
+                .scaling_raw = std::move(chunk_scales),
+                .rotation_raw = std::move(chunk_rotation),
+                .shN_canonical = std::move(chunk_shN),
+                .child_count = std::move(chunk_child_count),
+                .child_start = std::move(chunk_child_start),
+            };
+        }
+
         // ============================================================================
         // RAD Encoder
         // ============================================================================
@@ -1549,11 +1828,9 @@ namespace lfs::io {
         class RadEncoder {
         public:
             explicit RadEncoder(int compression_level = GZ_LEVEL,
-                                const std::vector<float>& lod_ratios = {},
                                 bool flip_y = false,
                                 ExportProgressCallback progress_callback = nullptr)
                 : compression_level_(compression_level),
-                  lod_ratios_(lod_ratios),
                   flip_y_(flip_y),
                   progress_callback_(std::move(progress_callback)) {}
 
@@ -1564,13 +1841,29 @@ namespace lfs::io {
                 }
 
                 std::optional<SplatData> visible_splat_data;
+                std::optional<SplatData> lod_splat_data;
                 const SplatData* export_source = &splat_data;
-                if (splat_data.has_deleted_mask() && splat_data.deleted().count_nonzero() > 0) {
+
+                const bool has_deleted = splat_data.has_deleted_mask() && splat_data.deleted().count_nonzero() > 0;
+
+                if (has_deleted) {
                     const Tensor keep_mask = splat_data.deleted().logical_not();
                     auto extracted = lfs::core::extract_by_mask(splat_data, keep_mask);
                     if (extracted.size() > 0) {
                         visible_splat_data = std::move(extracted);
                         export_source = &visible_splat_data.value();
+                    }
+                }
+
+                // Build LOD tree if the source doesn't have one.
+                if (!export_source->lod_tree || !export_source->lod_tree->has_tree()) {
+                    auto lod_progress = [&](float p, const std::string& stage) -> bool {
+                        return report_progress(p * 0.1f, stage);
+                    };
+                    auto lod_result = lfs::core::build_bhatt_lod(*export_source, 1.25f, lod_progress);
+                    if (lod_result && (*lod_result)->lod_tree && (*lod_result)->lod_tree->has_tree()) {
+                        lod_splat_data = std::move(**lod_result);
+                        export_source = &lod_splat_data.value();
                     }
                 }
 
@@ -1586,17 +1879,8 @@ namespace lfs::io {
                     throw std::runtime_error("CANCELLED");
                 }
 
-                // 0.3: Building LOD (always report, even if using defaults)
-                if (!report_progress(0.3f, "Building LOD...")) {
-                    throw std::runtime_error("CANCELLED");
-                }
-
-                if (auto lod_packed = build_lod(*export_source, lod_ratios_)) {
-                    packed = std::move(*lod_packed);
-                }
-
-                // 0.4: Preparing chunks
-                if (!report_progress(0.4f, "Preparing chunks...")) {
+                // 0.3: Preparing chunks
+                if (!report_progress(0.3f, "Preparing chunks...")) {
                     throw std::runtime_error("CANCELLED");
                 }
 
@@ -1621,7 +1905,8 @@ namespace lfs::io {
                     meta.splat_encoding = nlohmann::json{{"lodOpacity", true}};
                 }
 
-                // Encode chunks in parallel with dynamic scheduling
+                // Encode chunks in parallel. lfs_io already links TBB, so keep
+                // RAD export on the same threading runtime as the rest of IO.
                 std::vector<std::vector<uint8_t>> chunk_payloads(num_chunks);
                 std::vector<RadChunkRange> chunk_ranges(num_chunks);
                 std::atomic<uint32_t> completed_chunks{0};
@@ -1631,47 +1916,43 @@ namespace lfs::io {
                     throw std::runtime_error("CANCELLED");
                 }
 
-#ifdef _OPENMP
-#pragma omp parallel for schedule(dynamic, 1)
-#endif
-                for (int32_t chunk_idx = 0; chunk_idx < static_cast<int32_t>(num_chunks); ++chunk_idx) {
-                    const uint32_t base = static_cast<uint32_t>(chunk_idx) * CHUNK_SIZE;
-                    const uint32_t count = std::min(CHUNK_SIZE, num_splats - base);
+                tbb::parallel_for(
+                    tbb::blocked_range<uint32_t>(0, num_chunks, 1),
+                    [&](const tbb::blocked_range<uint32_t>& range) {
+                        for (uint32_t chunk_idx = range.begin(); chunk_idx != range.end(); ++chunk_idx) {
+                            const uint32_t base = chunk_idx * CHUNK_SIZE;
+                            const uint32_t count = std::min(CHUNK_SIZE, num_splats - base);
 
-                    // Thread-local progress callback (only report every 10% to reduce contention)
-                    auto chunk_progress_cb = [&](float /*progress*/) -> bool {
-                        // Check for cancellation periodically
-                        uint32_t completed = completed_chunks.load(std::memory_order_relaxed);
-                        if (completed % 16 == 0) {
-                            // Approximate overall progress
-                            float overall = 0.5f + (0.4f * static_cast<float>(completed) / static_cast<float>(num_chunks));
-                            return report_progress(overall, "Encoding chunks...");
+                            auto chunk_progress_cb = [&](float /*progress*/) -> bool {
+                                const uint32_t completed = completed_chunks.load(std::memory_order_relaxed);
+                                if (completed % 16 == 0) {
+                                    const float overall = 0.5f + (0.4f * static_cast<float>(completed) / static_cast<float>(num_chunks));
+                                    return report_progress(overall, "Encoding chunks...");
+                                }
+                                return true;
+                            };
+
+                            auto chunk_result = encode_chunk(
+                                base, count, sh_degree, sh_coeffs,
+                                packed.means.data(),
+                                packed.opacity.data(),
+                                packed.sh0.data(),
+                                packed.scales.data(),
+                                packed.rotation.data(),
+                                packed.shN.empty() ? nullptr : packed.shN.data(),
+                                lod_tree ? packed.child_count.data() : nullptr,
+                                lod_tree ? packed.child_start.data() : nullptr,
+                                lod_tree,
+                                chunk_progress_cb);
+
+                            chunk_ranges[chunk_idx].base = base;
+                            chunk_ranges[chunk_idx].count = count;
+                            chunk_ranges[chunk_idx].bytes = chunk_result.second.size();
+                            chunk_payloads[chunk_idx] = std::move(chunk_result.second);
+
+                            completed_chunks.fetch_add(1, std::memory_order_relaxed);
                         }
-                        return true;
-                    };
-
-                    auto chunk_result = encode_chunk(
-                        base, count, sh_degree, sh_coeffs,
-                        packed.means.data(),
-                        packed.opacity.data(),
-                        packed.sh0.data(),
-                        packed.scales.data(),
-                        packed.rotation.data(),
-                        packed.shN.empty() ? nullptr : packed.shN.data(),
-                        lod_tree ? packed.child_count.data() : nullptr,
-                        lod_tree ? packed.child_start.data() : nullptr,
-                        lod_tree,
-                        chunk_progress_cb);
-
-                    // Store results (each thread writes to its own index)
-                    chunk_ranges[chunk_idx].base = base;
-                    chunk_ranges[chunk_idx].count = count;
-                    chunk_ranges[chunk_idx].bytes = chunk_result.second.size();
-                    chunk_payloads[chunk_idx] = std::move(chunk_result.second);
-
-                    // Atomically increment completed count for progress tracking
-                    completed_chunks.fetch_add(1, std::memory_order_relaxed);
-                }
+                    });
 
                 // Build metadata in order (sequential - must preserve chunk order)
                 uint64_t current_chunk_offset = 0;
@@ -1740,206 +2021,6 @@ namespace lfs::io {
                 std::vector<uint32_t> child_start;
             };
 
-            struct PointCloudAdaptor {
-                const float* points = nullptr;
-                size_t num_points = 0;
-
-                [[nodiscard]] inline size_t kdtree_get_point_count() const { return num_points; }
-                [[nodiscard]] inline float kdtree_get_pt(const size_t idx, const size_t dim) const {
-                    return points[idx * 3 + dim];
-                }
-                template <class BBOX>
-                bool kdtree_get_bbox(BBOX&) const { return false; }
-            };
-
-            using LodKDTree = nanoflann::KDTreeSingleIndexAdaptor<
-                nanoflann::L2_Simple_Adaptor<float, PointCloudAdaptor>,
-                PointCloudAdaptor,
-                3>;
-
-            static void reorder_rows(std::vector<float>& rows, size_t row_width, const std::vector<size_t>& order) {
-                if (rows.empty()) {
-                    return;
-                }
-                if (row_width == 0 || rows.size() % row_width != 0) {
-                    rows.clear();
-                    return;
-                }
-
-                const size_t old_count = rows.size() / row_width;
-                if (order.size() != old_count) {
-                    return;
-                }
-
-                std::vector<float> reordered(order.size() * row_width);
-                for (size_t new_idx = 0; new_idx < order.size(); ++new_idx) {
-                    const size_t old_idx = order[new_idx];
-                    if (old_idx >= old_count) {
-                        continue;
-                    }
-                    std::memcpy(
-                        reordered.data() + new_idx * row_width,
-                        rows.data() + old_idx * row_width,
-                        row_width * sizeof(float));
-                }
-                rows = std::move(reordered);
-            }
-
-            static void reorder_level(PackedSplatData& level, const std::vector<size_t>& order) {
-                reorder_rows(level.means, 3, order);
-                reorder_rows(level.opacity, 1, order);
-                reorder_rows(level.sh0, 3, order);
-                reorder_rows(level.scales, 3, order);
-                reorder_rows(level.rotation, 4, order);
-                if (level.sh_coeffs > 0 && !level.shN.empty()) {
-                    reorder_rows(level.shN, static_cast<size_t>(level.sh_coeffs) * 3, order);
-                }
-                level.count = order.size();
-            }
-
-            static uint64_t expand_morton_21(uint32_t value) {
-                uint64_t x = static_cast<uint64_t>(value) & 0x1fffffULL;
-                x = (x | (x << 32)) & 0x1f00000000ffffULL;
-                x = (x | (x << 16)) & 0x1f0000ff0000ffULL;
-                x = (x | (x << 8)) & 0x100f00f00f00f00fULL;
-                x = (x | (x << 4)) & 0x10c30c30c30c30c3ULL;
-                x = (x | (x << 2)) & 0x1249249249249249ULL;
-                return x;
-            }
-
-            static uint64_t morton_code_3d(uint32_t x, uint32_t y, uint32_t z) {
-                return expand_morton_21(x) |
-                       (expand_morton_21(y) << 1) |
-                       (expand_morton_21(z) << 2);
-            }
-
-            static void sort_level_spatially(PackedSplatData& level) {
-                if (level.count <= 1 || level.means.size() < level.count * 3) {
-                    return;
-                }
-
-                std::array<float, 3> min_corner{
-                    std::numeric_limits<float>::infinity(),
-                    std::numeric_limits<float>::infinity(),
-                    std::numeric_limits<float>::infinity()};
-                std::array<float, 3> max_corner{
-                    -std::numeric_limits<float>::infinity(),
-                    -std::numeric_limits<float>::infinity(),
-                    -std::numeric_limits<float>::infinity()};
-
-                for (size_t i = 0; i < level.count; ++i) {
-                    for (size_t d = 0; d < 3; ++d) {
-                        const float value = level.means[i * 3 + d];
-                        min_corner[d] = std::min(min_corner[d], value);
-                        max_corner[d] = std::max(max_corner[d], value);
-                    }
-                }
-
-                std::array<float, 3> inv_extent{};
-                for (size_t d = 0; d < 3; ++d) {
-                    const float extent = max_corner[d] - min_corner[d];
-                    inv_extent[d] = extent > 1.0e-20f ? 1.0f / extent : 0.0f;
-                }
-
-                std::vector<std::pair<uint64_t, size_t>> keyed_order;
-                keyed_order.reserve(level.count);
-                for (size_t i = 0; i < level.count; ++i) {
-                    std::array<uint32_t, 3> q{};
-                    for (size_t d = 0; d < 3; ++d) {
-                        const float normalized = std::clamp(
-                            (level.means[i * 3 + d] - min_corner[d]) * inv_extent[d],
-                            0.0f,
-                            1.0f);
-                        q[d] = static_cast<uint32_t>(std::round(normalized * 2097151.0f));
-                    }
-                    keyed_order.emplace_back(morton_code_3d(q[0], q[1], q[2]), i);
-                }
-
-                std::sort(keyed_order.begin(), keyed_order.end(), [](const auto& a, const auto& b) {
-                    if (a.first != b.first) {
-                        return a.first < b.first;
-                    }
-                    return a.second < b.second;
-                });
-
-                std::vector<size_t> order;
-                order.reserve(level.count);
-                for (const auto& [_, index] : keyed_order) {
-                    order.push_back(index);
-                }
-                reorder_level(level, order);
-            }
-
-            static std::vector<size_t> assign_to_nearest_parent(const std::vector<float>& child_means,
-                                                                size_t child_count,
-                                                                const std::vector<float>& parent_means,
-                                                                size_t parent_count) {
-                std::vector<size_t> assignments(child_count, 0);
-                if (child_count == 0 || parent_count == 0) {
-                    return assignments;
-                }
-                if (parent_count == 1) {
-                    return assignments;
-                }
-
-                PointCloudAdaptor adaptor{parent_means.data(), parent_count};
-                LodKDTree index(3, adaptor, nanoflann::KDTreeSingleIndexAdaptorParams(10));
-                index.buildIndex();
-
-                for (size_t i = 0; i < child_count; ++i) {
-                    size_t nearest = 0;
-                    float out_dist_sqr = 0.0f;
-                    nanoflann::KNNResultSet<float> result_set(1);
-                    result_set.init(&nearest, &out_dist_sqr);
-                    index.findNeighbors(
-                        result_set,
-                        child_means.data() + i * 3,
-                        nanoflann::SearchParameters(10));
-                    assignments[i] = nearest;
-                }
-
-                return assignments;
-            }
-
-            static std::vector<size_t> build_grouped_child_order(const std::vector<size_t>& child_to_parent,
-                                                                 size_t parent_count,
-                                                                 uint32_t child_global_offset,
-                                                                 std::vector<uint16_t>& out_child_count,
-                                                                 std::vector<uint32_t>& out_child_start) {
-                out_child_count.assign(parent_count, 0);
-                out_child_start.assign(parent_count, 0);
-
-                std::vector<std::vector<size_t>> groups(parent_count);
-                for (size_t child = 0; child < child_to_parent.size(); ++child) {
-                    const size_t parent = std::min(child_to_parent[child], parent_count - 1);
-                    groups[parent].push_back(child);
-                }
-
-                std::vector<size_t> order;
-                order.reserve(child_to_parent.size());
-                for (size_t parent = 0; parent < parent_count; ++parent) {
-                    const auto& children = groups[parent];
-                    if (children.empty()) {
-                        continue;
-                    }
-
-                    if (children.size() > static_cast<size_t>(std::numeric_limits<uint16_t>::max())) {
-                        return {};
-                    }
-
-                    const uint64_t start = static_cast<uint64_t>(child_global_offset) + order.size();
-                    if (start > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
-                        return {};
-                    }
-
-                    out_child_count[parent] = static_cast<uint16_t>(children.size());
-                    out_child_start[parent] = static_cast<uint32_t>(start);
-                    order.insert(order.end(), children.begin(), children.end());
-                }
-
-                return order;
-            }
-
             static PackedSplatData pack_splat_data(const SplatData& splat_data, bool flip_y = false) {
                 PackedSplatData packed;
                 packed.count = static_cast<size_t>(splat_data.size());
@@ -1962,15 +2043,30 @@ namespace lfs::io {
 
                 // Apply Y-flip if requested (negate Y coordinate of positions)
                 if (flip_y) {
-                    for (size_t i = 0; i < packed.count; ++i) {
-                        packed.means[i * 3 + 1] = -packed.means[i * 3 + 1];
-                    }
+                    tbb::parallel_for(
+                        tbb::blocked_range<size_t>(0, packed.count),
+                        [&](const tbb::blocked_range<size_t>& range) {
+                            for (size_t i = range.begin(); i != range.end(); ++i) {
+                                packed.means[i * 3 + 1] = -packed.means[i * 3 + 1];
+                            }
+                        });
                 }
 
-                packed.opacity = copy_f32(splat_data.get_opacity(), packed.count);
+                if (splat_data.lod_tree && splat_data.lod_tree->lod_opacity_encoded) {
+                    // For LOD-encoded opacity, read raw values directly (display-space, can exceed 1.0)
+                    packed.opacity = copy_f32(splat_data.opacity_raw(), packed.count);
+                } else {
+                    packed.opacity = copy_f32(splat_data.get_opacity(), packed.count);
+                }
                 packed.sh0 = copy_f32(splat_data.sh0_raw(), packed.count * 3);
-                for (float& value : packed.sh0) {
-                    value = 0.5f + SH_C0 * value;
+                if (!packed.sh0.empty()) {
+                    tbb::parallel_for(
+                        tbb::blocked_range<size_t>(0, packed.sh0.size()),
+                        [&](const tbb::blocked_range<size_t>& range) {
+                            for (size_t i = range.begin(); i != range.end(); ++i) {
+                                packed.sh0[i] = 0.5f + SH_C0 * packed.sh0[i];
+                            }
+                        });
                 }
                 packed.scales = copy_f32(splat_data.get_scaling(), packed.count * 3);
                 packed.rotation = copy_f32(splat_data.get_rotation(), packed.count * 4);
@@ -1980,352 +2076,13 @@ namespace lfs::io {
                     packed.shN = copy_f32(shN_canon, packed.count * static_cast<size_t>(packed.sh_coeffs) * 3);
                 }
 
-                return packed;
-            }
-
-            // Build LOD with custom ratios. Ratios should be in ascending order (e.g., {0.2, 0.5, 1.0})
-            static std::optional<PackedSplatData> build_lod(const SplatData& source,
-                                                            const std::vector<float>& custom_ratios) {
-                if (source.size() == 0) {
-                    return std::nullopt;
-                }
-
-                // Use default ratios if not provided
-                std::vector<float> ratios = custom_ratios;
-                if (ratios.empty()) {
-                    ratios = {0.2f, 0.5f, 1.0f}; // Default: 20%, 50%, 100%
-                }
-
-                // Ensure ratios are sorted and within valid range
-                std::sort(ratios.begin(), ratios.end());
-                for (float& r : ratios) {
-                    r = std::clamp(r, 0.01f, 1.0f);
-                }
-
-                // Remove duplicates
-                ratios.erase(std::unique(ratios.begin(), ratios.end()), ratios.end());
-
-                if (ratios.empty()) {
-                    ratios = {1.0f}; // At least 100%
-                }
-
-                // Ensure 100% (full detail) is included
-                if (ratios.back() < 1.0f) {
-                    ratios.push_back(1.0f);
-                }
-
-                constexpr size_t kUpperLodFanout = 64;
-
-                // Build all LOD levels
-                std::vector<PackedSplatData> levels;
-                std::vector<std::vector<uint16_t>> child_counts;
-                std::vector<std::vector<uint32_t>> child_starts;
-
-                for (size_t i = 0; i < ratios.size(); ++i) {
-                    float ratio = ratios[i];
-                    PackedSplatData level;
-
-                    if (ratio >= 1.0f) {
-                        // Full detail - use source directly
-                        level = pack_splat_data(source);
-                    } else {
-                        // Simplified level
-                        lfs::core::SplatSimplifyOptions options;
-                        options.ratio = ratio;
-                        auto result = lfs::core::simplify_splats(source, options, {});
-                        if (!result || !result.value()) {
-                            LOG_WARN("RAD export: failed to build LOD at ratio {}, falling back to non-LOD", ratio);
-                            return std::nullopt;
-                        }
-                        level = pack_splat_data(*result.value());
-                    }
-
-                    if (level.count == 0) {
-                        LOG_WARN("RAD export: LOD at ratio {} produced empty level, falling back to non-LOD", ratio);
-                        return std::nullopt;
-                    }
-
-                    levels.push_back(std::move(level));
-                    child_counts.emplace_back();
-                    child_starts.emplace_back();
-                }
-
-                // Verify all levels have same SH degree
-                int sh_degree = levels.back().sh_degree;
-                for (const auto& level : levels) {
-                    if (level.sh_degree != sh_degree) {
-                        LOG_WARN("RAD export: LOD levels disagree on SH degree, falling back to non-LOD");
-                        return std::nullopt;
-                    }
-                }
-
-                sort_level_spatially(levels.front());
-
-                // Build parent-child relationships and reorder levels
-                // Process from coarsest to finest (reverse order of ratios)
-                for (size_t i = 0; i < levels.size() - 1; ++i) {
-                    size_t coarse_idx = i;
-                    size_t fine_idx = i + 1;
-
-                    const auto& coarse = levels[coarse_idx];
-                    auto& fine = levels[fine_idx];
-
-                    // Calculate global offset for this fine level
-                    uint64_t global_offset = 0;
-                    for (size_t j = 0; j <= coarse_idx; ++j) {
-                        global_offset += levels[j].count;
-                    }
-
-                    if (global_offset > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
-                        LOG_WARN("RAD export: too many splats for LOD index range, falling back to non-LOD");
-                        return std::nullopt;
-                    }
-
-                    // Assign children
-                    const auto fine_to_coarse = assign_to_nearest_parent(
-                        fine.means, fine.count, coarse.means, coarse.count);
-
-                    auto fine_order = build_grouped_child_order(
-                        fine_to_coarse,
-                        coarse.count,
-                        static_cast<uint32_t>(global_offset),
-                        child_counts[coarse_idx],
-                        child_starts[coarse_idx]);
-
-                    if (fine_order.size() != fine.count) {
-                        LOG_WARN("RAD export: failed to order LOD children, falling back to non-LOD");
-                        return std::nullopt;
-                    }
-
-                    reorder_level(fine, fine_order);
-                }
-
-                // Aggregate node helper
-                struct AggregateNode {
-                    std::array<float, 3> center{0.0f, 0.0f, 0.0f};
-                    float opacity = 1.0f;
-                    std::array<float, 3> sh0{0.0f, 0.0f, 0.0f};
-                    std::array<float, 3> scale{1.0e-3f, 1.0e-3f, 1.0e-3f};
-                    std::array<float, 4> rotation{1.0f, 0.0f, 0.0f, 0.0f};
-                    std::vector<float> shN;
-                };
-
-                auto aggregate_range = [&](const PackedSplatData& level, size_t start, size_t count) -> AggregateNode {
-                    AggregateNode node;
-                    if (count == 0) {
-                        return node;
-                    }
-
-                    std::array<float, 3> min_corner{
-                        std::numeric_limits<float>::infinity(),
-                        std::numeric_limits<float>::infinity(),
-                        std::numeric_limits<float>::infinity()};
-                    std::array<float, 3> max_corner{
-                        -std::numeric_limits<float>::infinity(),
-                        -std::numeric_limits<float>::infinity(),
-                        -std::numeric_limits<float>::infinity()};
-                    std::array<double, 3> sh0_sum{0.0, 0.0, 0.0};
-                    double opacity_sum = 0.0;
-
-                    const size_t shn_row_width = static_cast<size_t>(std::max(level.sh_coeffs, 0)) * 3;
-                    if (shn_row_width > 0) {
-                        node.shN.assign(shn_row_width, 0.0f);
-                    }
-
-                    for (size_t i = 0; i < count; ++i) {
-                        const size_t idx = start + i;
-                        for (size_t d = 0; d < 3; ++d) {
-                            const float c = level.means[idx * 3 + d];
-                            const float s = std::max(std::abs(level.scales[idx * 3 + d]), 1.0e-6f);
-                            min_corner[d] = std::min(min_corner[d], c - s);
-                            max_corner[d] = std::max(max_corner[d], c + s);
-                            sh0_sum[d] += static_cast<double>(level.sh0[idx * 3 + d]);
-                        }
-                        opacity_sum += static_cast<double>(level.opacity[idx]);
-
-                        if (shn_row_width > 0 && !level.shN.empty()) {
-                            const size_t base = idx * shn_row_width;
-                            for (size_t k = 0; k < shn_row_width; ++k) {
-                                node.shN[k] += level.shN[base + k];
-                            }
-                        }
-                    }
-
-                    for (size_t d = 0; d < 3; ++d) {
-                        node.center[d] = 0.5f * (min_corner[d] + max_corner[d]);
-                        node.scale[d] = std::max(0.5f * (max_corner[d] - min_corner[d]), 1.0e-6f);
-                        node.sh0[d] = static_cast<float>(sh0_sum[d] / static_cast<double>(count));
-                    }
-                    node.opacity = std::clamp(static_cast<float>(opacity_sum / static_cast<double>(count)), 0.0f, 1.0f);
-
-                    if (!node.shN.empty()) {
-                        const float inv_count = 1.0f / static_cast<float>(count);
-                        for (float& v : node.shN) {
-                            v *= inv_count;
-                        }
-                    }
-
-                    return node;
-                };
-
-                auto append_node_to_level = [&](PackedSplatData& dst, const AggregateNode& node) {
-                    dst.means.insert(dst.means.end(), node.center.begin(), node.center.end());
-                    dst.opacity.push_back(node.opacity);
-                    dst.sh0.insert(dst.sh0.end(), node.sh0.begin(), node.sh0.end());
-                    dst.scales.insert(dst.scales.end(), node.scale.begin(), node.scale.end());
-                    dst.rotation.insert(dst.rotation.end(), node.rotation.begin(), node.rotation.end());
-                    if (dst.sh_coeffs > 0) {
-                        if (!node.shN.empty()) {
-                            dst.shN.insert(dst.shN.end(), node.shN.begin(), node.shN.end());
-                        } else {
-                            dst.shN.insert(dst.shN.end(), static_cast<size_t>(dst.sh_coeffs) * 3, 0.0f);
-                        }
-                    }
-                };
-
-                auto make_upper_level = [&](const PackedSplatData& child_level) {
-                    PackedSplatData parent_level;
-                    parent_level.count = (child_level.count + kUpperLodFanout - 1) / kUpperLodFanout;
-                    parent_level.sh_degree = sh_degree;
-                    parent_level.sh_coeffs = child_level.sh_coeffs;
-                    parent_level.lod_tree = true;
-                    parent_level.means.reserve(parent_level.count * 3);
-                    parent_level.opacity.reserve(parent_level.count);
-                    parent_level.sh0.reserve(parent_level.count * 3);
-                    parent_level.scales.reserve(parent_level.count * 3);
-                    parent_level.rotation.reserve(parent_level.count * 4);
-                    if (parent_level.sh_coeffs > 0) {
-                        parent_level.shN.reserve(parent_level.count * static_cast<size_t>(parent_level.sh_coeffs) * 3);
-                    }
-
-                    for (size_t g = 0; g < parent_level.count; ++g) {
-                        const size_t group_start = g * kUpperLodFanout;
-                        const size_t group_count = std::min(kUpperLodFanout, child_level.count - group_start);
-                        append_node_to_level(parent_level, aggregate_range(child_level, group_start, group_count));
-                    }
-                    return parent_level;
-                };
-
-                // Build a bounded-fanout hierarchy above the coarsest simplified level.
-                // The previous implementation connected the root to arbitrary 65k-wide
-                // row groups, which creates scene-sized blobs and weak paging boundaries.
-                std::vector<PackedSplatData> upper_levels;
-                const PackedSplatData* child_level = &levels.front();
-                while (true) {
-                    upper_levels.push_back(make_upper_level(*child_level));
-                    if (upper_levels.back().count == 1) {
-                        break;
-                    }
-                    child_level = &upper_levels.back();
-                }
-
-                // Build final packed data with tree structure. Upper levels are stored
-                // root-first, followed by original LOD levels from coarsest to finest.
-                const size_t finest_idx = levels.size() - 1;
-                size_t current_base = 0;
-                std::vector<size_t> upper_bases(upper_levels.size());
-                for (size_t out = 0; out < upper_levels.size(); ++out) {
-                    const size_t upper_idx = upper_levels.size() - 1 - out;
-                    upper_bases[upper_idx] = current_base;
-                    current_base += upper_levels[upper_idx].count;
-                }
-
-                std::vector<size_t> level_bases(levels.size());
-                for (size_t i = 0; i < levels.size(); ++i) {
-                    level_bases[i] = current_base;
-                    current_base += levels[i].count;
-                }
-                const size_t total_count = current_base;
-
-                if (total_count > static_cast<size_t>(std::numeric_limits<uint32_t>::max())) {
-                    LOG_WARN("RAD export: packed LOD exceeds u32 index range, falling back to non-LOD");
-                    return std::nullopt;
-                }
-
-                // Build final packed data
-                PackedSplatData packed;
-                packed.count = total_count;
-                packed.sh_degree = sh_degree;
-                packed.sh_coeffs = levels[finest_idx].sh_coeffs;
-                packed.lod_tree = true;
-                packed.child_count.assign(packed.count, 0);
-                packed.child_start.assign(packed.count, 0);
-
-                auto append_rows = [](std::vector<float>& dst, const std::vector<float>& src) {
-                    dst.insert(dst.end(), src.begin(), src.end());
-                };
-
-                // Reserve space
-                packed.means.reserve(packed.count * 3);
-                packed.opacity.reserve(packed.count);
-                packed.sh0.reserve(packed.count * 3);
-                packed.scales.reserve(packed.count * 3);
-                packed.rotation.reserve(packed.count * 4);
-                if (packed.sh_coeffs > 0) {
-                    packed.shN.reserve(packed.count * static_cast<size_t>(packed.sh_coeffs) * 3);
-                }
-
-                // Add upper hierarchy root-first.
-                for (size_t out = 0; out < upper_levels.size(); ++out) {
-                    const size_t upper_idx = upper_levels.size() - 1 - out;
-                    append_rows(packed.means, upper_levels[upper_idx].means);
-                    packed.opacity.insert(packed.opacity.end(), upper_levels[upper_idx].opacity.begin(), upper_levels[upper_idx].opacity.end());
-                    append_rows(packed.sh0, upper_levels[upper_idx].sh0);
-                    append_rows(packed.scales, upper_levels[upper_idx].scales);
-                    append_rows(packed.rotation, upper_levels[upper_idx].rotation);
-                    if (packed.sh_coeffs > 0) {
-                        append_rows(packed.shN, upper_levels[upper_idx].shN);
-                    }
-                }
-
-                // Add all LOD levels (coarsest to finest)
-                for (size_t i = 0; i < levels.size(); ++i) {
-                    append_rows(packed.means, levels[i].means);
-                    packed.opacity.insert(packed.opacity.end(), levels[i].opacity.begin(), levels[i].opacity.end());
-                    append_rows(packed.sh0, levels[i].sh0);
-                    append_rows(packed.scales, levels[i].scales);
-                    append_rows(packed.rotation, levels[i].rotation);
-                    if (packed.sh_coeffs > 0) {
-                        append_rows(packed.shN, levels[i].shN);
-                    }
-                }
-
-                // Set up child links
-                for (size_t upper_idx = 0; upper_idx < upper_levels.size(); ++upper_idx) {
-                    const bool points_to_coarsest = upper_idx == 0;
-                    const size_t child_base = points_to_coarsest ? level_bases[0] : upper_bases[upper_idx - 1];
-                    const size_t child_total = points_to_coarsest ? levels[0].count : upper_levels[upper_idx - 1].count;
-
-                    for (size_t j = 0; j < upper_levels[upper_idx].count; ++j) {
-                        const size_t group_start = j * kUpperLodFanout;
-                        const size_t group_count = std::min(kUpperLodFanout, child_total - group_start);
-                        const size_t idx = upper_bases[upper_idx] + j;
-                        packed.child_count[idx] = static_cast<uint16_t>(group_count);
-                        packed.child_start[idx] = static_cast<uint32_t>(child_base + group_start);
-                    }
-                }
-
-                // Level-to-level links
-                const uint32_t index_shift = static_cast<uint32_t>(level_bases[0]);
-
-                for (size_t i = 0; i < levels.size() - 1; ++i) {
-                    size_t coarse_level_idx = i;
-
-                    for (size_t j = 0; j < levels[coarse_level_idx].count; ++j) {
-                        const size_t idx = level_bases[coarse_level_idx] + j;
-                        packed.child_count[idx] = child_counts[coarse_level_idx][j];
-                        if (child_counts[coarse_level_idx][j] > 0) {
-                            packed.child_start[idx] = child_starts[coarse_level_idx][j] + index_shift;
-                        }
-                    }
+                if (splat_data.lod_tree && splat_data.lod_tree->has_tree()) {
+                    packed.lod_tree = true;
+                    packed.child_count = splat_data.lod_tree->child_count;
+                    packed.child_start = splat_data.lod_tree->child_start;
                 }
 
                 return packed;
-            }
-
-            // Backward compatibility: use default three-level LOD
-            static std::optional<PackedSplatData> build_three_level_lod(const SplatData& source) {
-                return build_lod(source, {}); // Empty ratios = use defaults
             }
 
             std::pair<RadChunkMeta, std::vector<uint8_t>> encode_chunk(
@@ -2355,24 +2112,12 @@ namespace lfs::io {
                 encoded_props.reserve(lod_tree ? 12 : 10);
 
                 // Thread-local buffers for temporary data to avoid allocation contention
-                thread_local std::vector<float> tl_center_data;
-                thread_local std::vector<float> tl_alpha_data;
-                thread_local std::vector<float> tl_rgb_data;
-                thread_local std::vector<float> tl_scales_data;
-                thread_local std::vector<float> tl_quat_data;
                 thread_local std::vector<float> tl_sh_data;
 
                 // Encode center (3 components together as single property)
                 {
-                    tl_center_data.resize(count * 3);
-                    for (uint32_t i = 0; i < count; ++i) {
-                        tl_center_data[i * 3 + 0] = means_ptr[(base + i) * 3 + 0];
-                        tl_center_data[i * 3 + 1] = means_ptr[(base + i) * 3 + 1];
-                        tl_center_data[i * 3 + 2] = means_ptr[(base + i) * 3 + 2];
-                    }
-
                     // Encode all 3 components together as "center" property
-                    auto encoded = PropertyEncoder::encode_center(tl_center_data.data(), 3, count, RadCenterEncoding::Auto);
+                    auto encoded = PropertyEncoder::encode_center(means_ptr + static_cast<size_t>(base) * 3, 3, count, RadCenterEncoding::Auto);
                     auto compressed = rad_compress(encoded.data.data(), encoded.data.size(), compression_level_);
 
                     RadChunkProperty prop;
@@ -2393,12 +2138,7 @@ namespace lfs::io {
 
                 // Encode alpha
                 {
-                    tl_alpha_data.resize(count);
-                    for (uint32_t i = 0; i < count; ++i) {
-                        tl_alpha_data[i] = opacity_ptr[base + i];
-                    }
-
-                    auto encoded = PropertyEncoder::encode_alpha(tl_alpha_data.data(), count, RadAlphaEncoding::Auto);
+                    auto encoded = PropertyEncoder::encode_alpha(opacity_ptr + base, count, RadAlphaEncoding::Auto, lod_tree);
                     auto compressed = rad_compress(encoded.data.data(), encoded.data.size(), compression_level_);
 
                     RadChunkProperty prop;
@@ -2423,15 +2163,8 @@ namespace lfs::io {
 
                 // Encode RGB (sh0) - all 3 components together as single property
                 {
-                    tl_rgb_data.resize(count * 3);
-                    for (uint32_t i = 0; i < count; ++i) {
-                        tl_rgb_data[i * 3 + 0] = sh0_ptr[(base + i) * 3 + 0];
-                        tl_rgb_data[i * 3 + 1] = sh0_ptr[(base + i) * 3 + 1];
-                        tl_rgb_data[i * 3 + 2] = sh0_ptr[(base + i) * 3 + 2];
-                    }
-
                     // Encode all 3 components together as "rgb" property
-                    auto encoded = PropertyEncoder::encode_rgb(tl_rgb_data.data(), 3, count, RadRgbEncoding::Auto);
+                    auto encoded = PropertyEncoder::encode_rgb(sh0_ptr + static_cast<size_t>(base) * 3, 3, count, RadRgbEncoding::Auto);
                     auto compressed = rad_compress(encoded.data.data(), encoded.data.size(), compression_level_);
 
                     RadChunkProperty prop;
@@ -2460,15 +2193,8 @@ namespace lfs::io {
 
                 // Encode scales - all 3 components together as single property
                 {
-                    tl_scales_data.resize(count * 3);
-                    for (uint32_t i = 0; i < count; ++i) {
-                        tl_scales_data[i * 3 + 0] = scales_ptr[(base + i) * 3 + 0];
-                        tl_scales_data[i * 3 + 1] = scales_ptr[(base + i) * 3 + 1];
-                        tl_scales_data[i * 3 + 2] = scales_ptr[(base + i) * 3 + 2];
-                    }
-
                     // Encode all 3 components together as "scales" property
-                    auto encoded = PropertyEncoder::encode_scales(tl_scales_data.data(), 3, count, RadScalesEncoding::Auto);
+                    auto encoded = PropertyEncoder::encode_scales(scales_ptr + static_cast<size_t>(base) * 3, 3, count, RadScalesEncoding::Auto);
                     auto compressed = rad_compress(encoded.data.data(), encoded.data.size(), compression_level_);
 
                     RadChunkProperty prop;
@@ -2495,16 +2221,10 @@ namespace lfs::io {
 
                 // Encode orientation
                 {
-                    tl_quat_data.resize(count * 4);
-                    for (uint32_t i = 0; i < count; ++i) {
-                        // SplatData stores as [w, x, y, z], we need [x, y, z, w] for encoding
-                        tl_quat_data[i * 4 + 0] = rotation_ptr[(base + i) * 4 + 1]; // x
-                        tl_quat_data[i * 4 + 1] = rotation_ptr[(base + i) * 4 + 2]; // y
-                        tl_quat_data[i * 4 + 2] = rotation_ptr[(base + i) * 4 + 3]; // z
-                        tl_quat_data[i * 4 + 3] = rotation_ptr[(base + i) * 4 + 0]; // w
-                    }
-
-                    auto encoded = PropertyEncoder::encode_orientation(tl_quat_data.data(), count, RadOrientationEncoding::Auto);
+                    EncodedProperty encoded;
+                    encoded.data = encode_quat_oct88r8(rotation_ptr + static_cast<size_t>(base) * 4, count, true);
+                    encoded.encoding = "oct88r8";
+                    encoded.compression = "none";
                     auto compressed = rad_compress(encoded.data.data(), encoded.data.size(), compression_level_);
 
                     RadChunkProperty prop;
@@ -2659,7 +2379,6 @@ namespace lfs::io {
             }
 
             int compression_level_;
-            std::vector<float> lod_ratios_;
             bool flip_y_;
             ExportProgressCallback progress_callback_;
 
@@ -2677,7 +2396,9 @@ namespace lfs::io {
 
         class RadDecoder {
         public:
-            std::expected<SplatData, std::string> decode(const std::vector<uint8_t>& data) {
+            std::expected<SplatData, std::string> decode(
+                const std::vector<uint8_t>& data,
+                const std::filesystem::path* source_path = nullptr) {
                 if (data.size() < 8) {
                     return std::unexpected("RAD file too small");
                 }
@@ -2715,14 +2436,22 @@ namespace lfs::io {
                 std::vector<float> all_means;
                 std::vector<float> all_opacity;
                 std::vector<float> all_sh0;
-                std::vector<float> all_scales;
+                std::vector<float> all_scales_linear;
                 std::vector<float> all_rotation;
                 std::vector<float> all_shN;
+                std::vector<uint16_t> all_child_count;
+                std::vector<uint32_t> all_child_start;
+                std::vector<lfs::core::SplatLodTree::ChunkFileRange> chunk_file_ranges;
 
                 const int max_sh = meta.max_sh.value_or(0);
                 const int sh_coeffs = max_sh > 0 ? SH_COEFFS_FOR_DEGREE[max_sh] : 0;
+                const bool has_lod_tree = meta.lod_tree.value_or(false);
+                if (has_lod_tree) {
+                    chunk_file_ranges.reserve(meta.chunks.size());
+                }
 
                 for (size_t chunk_idx = 0; chunk_idx < meta.chunks.size(); ++chunk_idx) {
+                    const size_t chunk_file_offset = offset;
                     if (offset + 8 > data.size()) {
                         return std::unexpected("Unexpected end of RAD file (chunk header)");
                     }
@@ -2767,6 +2496,16 @@ namespace lfs::io {
                             return std::unexpected("Chunk payload exceeds file bounds");
                         }
                     }
+                    if (has_lod_tree) {
+                        chunk_file_ranges.push_back({
+                            .file_offset = static_cast<uint64_t>(chunk_file_offset),
+                            .file_bytes = static_cast<uint64_t>(chunk_end - chunk_file_offset),
+                            .payload_offset = static_cast<uint64_t>(payload_start),
+                            .payload_bytes = chunk.payload_bytes,
+                            .base = chunk.base,
+                            .count = chunk.count,
+                        });
+                    }
 
                     const size_t chunk_count = static_cast<size_t>(chunk.count);
                     std::vector<float> chunk_means(chunk_count * 3);
@@ -2775,6 +2514,12 @@ namespace lfs::io {
                     std::vector<float> chunk_scales(chunk_count * 3);
                     std::vector<float> chunk_rotation(chunk_count * 4);
                     std::vector<float> chunk_shN(chunk_count * sh_coeffs * 3, 0.0f);
+                    std::vector<uint16_t> chunk_child_count;
+                    std::vector<uint32_t> chunk_child_start;
+                    if (has_lod_tree) {
+                        chunk_child_count.resize(chunk_count);
+                        chunk_child_start.resize(chunk_count);
+                    }
 
                     // Temporary buffers for component data
                     std::vector<float> comp_data(chunk_count);
@@ -2901,13 +2646,25 @@ namespace lfs::io {
                                 int coeff = std::stoi(prop.property.substr(first_underscore + 1, second_underscore - first_underscore - 1));
                                 int ch = prop.property.back() - '0';
                                 PropertyDecoder::decode_sh(prop_data.data(), comp_data.data(), 1, chunk_count,
-                                                           prop.encoding,
-                                                           prop.min_val.value_or(0.0f),
-                                                           prop.max_val.value_or(1.0f),
-                                                           prop.base.value_or(0.0f),
-                                                           prop.scale.value_or(1.0f));
+                                                            prop.encoding,
+                                                            prop.min_val.value_or(0.0f),
+                                                            prop.max_val.value_or(1.0f),
+                                                            prop.base.value_or(0.0f),
+                                                            prop.scale.value_or(1.0f));
                                 for (size_t i = 0; i < chunk_count; ++i) {
                                     chunk_shN[i * sh_coeffs * 3 + coeff * 3 + ch] = comp_data[i];
+                                }
+                            }
+                        } else if (prop.property == PROP_CHILD_COUNT) {
+                            if (prop_data.size() >= chunk_count * 2) {
+                                for (size_t i = 0; i < chunk_count; ++i) {
+                                    chunk_child_count[i] = decode_u16(&prop_data[i * 2]);
+                                }
+                            }
+                        } else if (prop.property == PROP_CHILD_START) {
+                            if (prop_data.size() >= chunk_count * 4) {
+                                for (size_t i = 0; i < chunk_count; ++i) {
+                                    chunk_child_start[i] = decode_u32(&prop_data[i * 4]);
                                 }
                             }
                         }
@@ -2917,9 +2674,13 @@ namespace lfs::io {
                     all_means.insert(all_means.end(), chunk_means.begin(), chunk_means.end());
                     all_opacity.insert(all_opacity.end(), chunk_opacity.begin(), chunk_opacity.end());
                     all_sh0.insert(all_sh0.end(), chunk_sh0.begin(), chunk_sh0.end());
-                    all_scales.insert(all_scales.end(), chunk_scales.begin(), chunk_scales.end());
+                    all_scales_linear.insert(all_scales_linear.end(), chunk_scales.begin(), chunk_scales.end());
                     all_rotation.insert(all_rotation.end(), chunk_rotation.begin(), chunk_rotation.end());
                     all_shN.insert(all_shN.end(), chunk_shN.begin(), chunk_shN.end());
+                    if (has_lod_tree) {
+                        all_child_count.insert(all_child_count.end(), chunk_child_count.begin(), chunk_child_count.end());
+                        all_child_start.insert(all_child_start.end(), chunk_child_start.begin(), chunk_child_start.end());
+                    }
 
                     // Move to next chunk
                     offset = chunk_end;
@@ -2928,10 +2689,47 @@ namespace lfs::io {
                 // Create tensors
                 const size_t N = meta.count;
 
+                // RAD stores display RGB in SH0 slot (0.5 + SH_C0 * sh0_raw).
+                // Convert back to optimizer-domain sh0_raw expected by SplatData.
+                for (float& v : all_sh0) {
+                    v = (v - 0.5f) / SH_C0;
+                }
+
+                bool lod_opacity_encoded = has_lod_tree;
+                if (meta.splat_encoding.has_value()) {
+                    const auto& enc = meta.splat_encoding.value();
+                    if (enc.is_object()) {
+                        auto it = enc.find("lodOpacity");
+                        if (it != enc.end() && it->is_boolean()) {
+                            lod_opacity_encoded = it->get<bool>();
+                        }
+                    }
+                }
+                if (!lod_opacity_encoded) {
+                    // RAD stores activated opacity alpha in [0, 1]. Convert back to
+                    // optimizer-domain logits expected by SplatData.
+                    for (float& v : all_opacity) {
+                        const float a = std::clamp(v, 1.0e-6f, 1.0f - 1.0e-6f);
+                        v = std::log(a / (1.0f - a));
+                    }
+                } else {
+                    // Spark LOD opacity encoding stores display-space alpha directly and
+                    // can legitimately exceed 1.0 for dense merged nodes.
+                    for (float& v : all_opacity) {
+                        v = std::max(v, 0.0f);
+                    }
+                }
+
                 Tensor means_tensor = Tensor::from_vector(all_means, {N, 3}, Device::CPU);
                 Tensor opacity_tensor = Tensor::from_vector(all_opacity, {N, 1}, Device::CPU);
                 Tensor sh0_tensor = Tensor::from_vector(all_sh0, {N, 1, 3}, Device::CPU);
-                Tensor scales_tensor = Tensor::from_vector(all_scales, {N, 3}, Device::CPU);
+                // RAD stores activated (linear) scale values. SplatData expects
+                // optimizer-domain scaling_raw (log-space), so convert here.
+                std::vector<float> all_scales_raw = all_scales_linear;
+                for (float& v : all_scales_raw) {
+                    v = std::log(std::max(v, 1.0e-8f));
+                }
+                Tensor scales_tensor = Tensor::from_vector(all_scales_raw, {N, 3}, Device::CPU);
                 Tensor rotation_tensor = Tensor::from_vector(all_rotation, {N, 4}, Device::CPU);
 
                 Tensor shN_tensor;
@@ -2950,6 +2748,54 @@ namespace lfs::io {
                     std::move(opacity_tensor),
                     1.0f // scene_scale
                 );
+
+                // Attach LOD tree if present
+                if (!all_child_count.empty()) {
+                    if (all_child_count.size() != N || all_child_start.size() != N) {
+                        return std::unexpected("RAD LOD tree size mismatch");
+                    }
+                    auto tree = std::make_unique<lfs::core::SplatLodTree>();
+                    tree->child_count = std::move(all_child_count);
+                    tree->child_start = std::move(all_child_start);
+                    const size_t chunk_count =
+                        (N + lfs::core::SplatLodTree::kChunkSplats - 1) /
+                        lfs::core::SplatLodTree::kChunkSplats;
+                    tree->chunk_to_page.resize(chunk_count);
+                    tree->page_to_chunk.resize(chunk_count);
+                    std::iota(tree->chunk_to_page.begin(), tree->chunk_to_page.end(), 0u);
+                    std::iota(tree->page_to_chunk.begin(), tree->page_to_chunk.end(), 0u);
+                    if (source_path != nullptr && !source_path->empty()) {
+                        tree->rad_source.path = *source_path;
+                        tree->rad_source.chunk_size = meta.chunk_size.value_or(CHUNK_SIZE);
+                        tree->rad_source.metadata_bytes = 8 + pad8(meta_size);
+                        tree->rad_source.chunks = std::move(chunk_file_ranges);
+                    }
+                    tree->centers.reserve(N);
+                    tree->sizes.reserve(N);
+                    for (size_t i = 0; i < N; ++i) {
+                        const float cx = all_means[i * 3 + 0];
+                        const float cy = all_means[i * 3 + 1];
+                        const float cz = all_means[i * 3 + 2];
+                        tree->centers.emplace_back(cx, cy, cz);
+
+                        const float sx = all_scales_linear[i * 3 + 0];
+                        const float sy = all_scales_linear[i * 3 + 1];
+                        const float sz = all_scales_linear[i * 3 + 2];
+                        const float avg_scale = (sx + sy + sz) / 3.0f;
+                        float expansion = 1.0f;
+                        if (lod_opacity_encoded) {
+                            const float lod_alpha = std::max(all_opacity[i], 0.0f);
+                            if (lod_alpha > 1.0f) {
+                                const float spark_lod_opacity = std::min(lod_alpha * 4.0f - 3.0f, 5.0f);
+                                expansion = 1.0f + 0.7f * (spark_lod_opacity - 1.0f);
+                            }
+                        }
+                        const float size = 2.0f * expansion * avg_scale;
+                        tree->sizes.push_back(size);
+                    }
+                    tree->lod_opacity_encoded = lod_opacity_encoded;
+                    splat_data.lod_tree = std::move(tree);
+                }
 
                 return std::expected<SplatData, std::string>(std::move(splat_data));
             }
@@ -2988,7 +2834,7 @@ namespace lfs::io {
 
         // Decode
         RadDecoder decoder;
-        auto result = decoder.decode(data);
+        auto result = decoder.decode(data, &filepath);
 
         if (!result) {
             return result;
@@ -3001,6 +2847,58 @@ namespace lfs::io {
                  result->size(), result->get_max_sh_degree(), elapsed.count());
 
         return result;
+    }
+
+    std::expected<RadDecodedChunk, std::string> load_rad_chunk(
+        const std::filesystem::path& filepath,
+        const lfs::core::SplatLodTree::ChunkFileRange& range,
+        const int max_sh_degree,
+        const bool lod_opacity_encoded) {
+        if (range.file_bytes == 0) {
+            return std::unexpected("RAD chunk range has zero bytes");
+        }
+        if (range.file_bytes > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+            return std::unexpected("RAD chunk range is too large for this platform");
+        }
+
+        std::ifstream in;
+        if (!lfs::core::open_file_for_read(filepath, std::ios::binary, in)) {
+            return std::unexpected(std::format("Failed to open RAD file for chunk read: {}",
+                                               lfs::core::path_to_utf8(filepath)));
+        }
+        in.seekg(static_cast<std::streamoff>(range.file_offset), std::ios::beg);
+        if (!in.good()) {
+            return std::unexpected(std::format("Failed to seek RAD chunk at offset {} in {}",
+                                               range.file_offset,
+                                               lfs::core::path_to_utf8(filepath)));
+        }
+
+        std::vector<uint8_t> data(static_cast<std::size_t>(range.file_bytes));
+        in.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()));
+        if (!in.good()) {
+            return std::unexpected(std::format("Failed to read RAD chunk at offset {} in {}",
+                                               range.file_offset,
+                                               lfs::core::path_to_utf8(filepath)));
+        }
+
+        auto decoded = decode_rad_chunk_buffer(data,
+                                               max_sh_degree,
+                                               true,
+                                               lod_opacity_encoded);
+        if (!decoded) {
+            return decoded;
+        }
+        if (range.base != 0 || range.count != 0) {
+            if (decoded->base != range.base || decoded->count != range.count) {
+                return std::unexpected(std::format(
+                    "RAD chunk range mismatch: range base/count={}/{}, decoded base/count={}/{}",
+                    range.base,
+                    range.count,
+                    decoded->base,
+                    decoded->count));
+            }
+        }
+        return decoded;
     }
 
     Result<void> save_rad(const SplatData& splat_data, const RadSaveOptions& options) {
@@ -3018,7 +2916,6 @@ namespace lfs::io {
 
         // Encode
         RadEncoder encoder(compression_level,
-                           options.lod_ratios,
                            options.flip_y,
                            scale_export_progress(options.progress_callback, 0.0f, 0.95f));
         std::vector<uint8_t> data;

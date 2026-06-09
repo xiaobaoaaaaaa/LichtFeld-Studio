@@ -168,6 +168,8 @@ add_library(lfs_io STATIC
         loaders/spz_loader.cpp
         loaders/usd_loader.hpp
         loaders/usd_loader.cpp
+        loaders/rad_loader.hpp
+        loaders/rad_loader.cpp
         loaders/checkpoint_loader.hpp
         loaders/checkpoint_loader.cpp
         loaders/mesh_loader.hpp
@@ -254,7 +256,7 @@ target_link_libraries(lfs_io
         lfs_core_cuda          # Core CUDA utilities (lanczos_resize for nvcodec)
         assimp::assimp         # Multi-format mesh import
         usdVol                 # OpenUSD Gaussian ParticleField import
-        $<IF:$<PLATFORM_ID:Windows>,OpenMeshCore,OpenMeshCoreStatic>
+        OpenMeshCore
         spz_lib                # Niantic SPZ compressed format
 )
 

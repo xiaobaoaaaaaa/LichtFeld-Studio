@@ -18,6 +18,8 @@ PACK_STRUCT(struct VulkanGSRendererUniforms {
     uint32_t camera_model;
     uint32_t sort_capacity;
     uint32_t shN_layout_slots;
+    uint32_t lod_enabled;
+    uint32_t lod_count;
     uint32_t mip_filter;
     uint32_t render_origin_x;
     uint32_t render_origin_y;
@@ -28,10 +30,11 @@ PACK_STRUCT(struct VulkanGSRendererUniforms {
     float fy;
     float cx;
     float cy;
+    uint32_t pad3[2];          // align dist_coeffs to 16 bytes (match shader)
     float dist_coeffs[4];
     float world_view_transform[16];
 });
-static_assert(sizeof(VulkanGSRendererUniforms) == 160);
+static_assert(sizeof(VulkanGSRendererUniforms) == 176);
 
 PACK_STRUCT(struct VulkanGSSelectionMaskUniforms {
     uint32_t num_splats;
@@ -101,7 +104,10 @@ public:
                                   const _VulkanBuffer& overlay_params,
                                   const _VulkanBuffer& model_transforms,
                                   size_t alloc_reserve = 0,
-                                  bool use_gut_projection = false);
+                                  bool use_gut_projection = false,
+                                  const _VulkanBuffer& lod_indices = _VulkanBuffer(),
+                                  const _VulkanBuffer& lod_logical_indices = _VulkanBuffer(),
+                                  const _VulkanBuffer& lod_levels = _VulkanBuffer());
     void executeGenerateKeys(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
     void executeComputeTileRanges(const VulkanGSRendererUniforms& uniforms, VulkanGSPipelineBuffers& buffers);
     void executeRasterizeForward(const VulkanGSRendererUniforms& uniforms,
@@ -179,8 +185,8 @@ protected:
                                         const _VulkanBuffer& overlay_params,
                                         bool overlays_active);
 
-    _ComputePipeline pipeline_projection_forward = _ComputePipeline(19);
-    _ComputePipeline pipeline_projection_forward_3dgut = _ComputePipeline(19);
+    _ComputePipeline pipeline_projection_forward = _ComputePipeline(21);
+    _ComputePipeline pipeline_projection_forward_3dgut = _ComputePipeline(21);
     _ComputePipeline pipeline_selection_mask = _ComputePipeline(9);
     _ComputePipeline pipeline_selection_polygon_rasterize = _ComputePipeline(2);
     _ComputePipeline pipeline_generate_keys = _ComputePipeline(7);

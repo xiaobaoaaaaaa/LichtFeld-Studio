@@ -265,6 +265,9 @@ void VulkanGSPipeline::cleanupBuffers(VulkanGSPipelineBuffers& buffers) {
     _(_cumsum_blockSums2)
     _(_sorting_histogram)
     _(_sorting_histogram_cumsum)
+    _(lod_indices)
+    _(lod_logical_indices)
+    _(lod_levels)
 #undef _
 }
 

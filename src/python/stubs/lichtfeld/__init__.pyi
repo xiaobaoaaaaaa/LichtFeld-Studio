@@ -261,7 +261,7 @@ def request_exit() -> None:
 def force_exit() -> None:
     """Force immediate application exit (bypasses confirmation)."""
 
-def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_lod_ratios: Sequence[float] | None = None, rad_flip_y: bool = False) -> None:
+def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False) -> None:
     """
     Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP.
     """
@@ -1115,12 +1115,8 @@ class SplatSimplifyMergeTree:
         """Requested simplify ratio"""
 
     @property
-    def requested_knn_k(self) -> int:
-        """Requested kNN neighborhood size"""
-
-    @property
-    def requested_merge_cap(self) -> float:
-        """Requested per-pass merge cap"""
+    def requested_lod_base(self) -> float:
+        """Requested LOD base factor"""
 
     @property
     def requested_opacity_prune_threshold(self) -> float:
@@ -1161,10 +1157,10 @@ class SplatSimplifyResult:
     def merge_tree(self) -> SplatSimplifyMergeTree:
         """Merge tree describing how the output was formed"""
 
-def simplify_splats(source_name: str, ratio: float = 0.1, knn_k: int = 16, merge_cap: float = 0.5, opacity_prune_threshold: float = 0.10000000149011612) -> None:
+def simplify_splats(source_name: str, ratio: float = 0.1, lod_base: float = 2.0, opacity_prune_threshold: float = 0.10000000149011612) -> None:
     """Simplify a splat node asynchronously and create a new output node."""
 
-def simplify_splat_data_with_history(source: scene.SplatData, ratio: float = 0.1, knn_k: int = 16, merge_cap: float = 0.5, opacity_prune_threshold: float = 0.10000000149011612, progress: object | None = None) -> SplatSimplifyResult:
+def simplify_splat_data_with_history(source: scene.SplatData, ratio: float = 0.1, lod_base: float = 2.0, opacity_prune_threshold: float = 0.10000000149011612, progress: object | None = None) -> SplatSimplifyResult:
     """
     Synchronously simplify SplatData and return both the simplified output and its merge tree.
     """
@@ -1393,6 +1389,11 @@ class RenderSettings:
     def __dir__(self) -> list: ...
 
 def get_render_settings() -> RenderSettings | None: ...
+
+def get_lod_stats() -> dict:
+    """
+    Get LOD statistics: {enabled, selected, budget, levels:[{level, count}, ...]}
+    """
 
 def register_class(cls: object) -> None:
     """Register a class (Panel, Operator, or Menu)"""
@@ -2294,7 +2295,7 @@ class DatasetInfo:
 
     def __repr__(self) -> str: ...
 
-def build_splat_lod_hierarchy(source: object | None = None, ratio: float = 0.5, knn_k: int = 16, merge_cap: float = 0.5, opacity_prune_threshold: float = 0.10000000149011612, max_levels: int | None = None, min_points: int = 1, progress: object | None = None) -> object:
+def build_splat_lod_hierarchy(source: object | None = None, ratio: float = 0.5, lod_base: float = 2.0, opacity_prune_threshold: float = 0.10000000149011612, max_levels: int | None = None, min_points: int = 1, progress: object | None = None) -> object:
     """
     Build a script-side multi-level LOD hierarchy from SplatData or a scene node.
     """

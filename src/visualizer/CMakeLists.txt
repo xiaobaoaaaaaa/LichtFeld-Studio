@@ -41,6 +41,8 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/rendering_manager_frame.cpp
         rendering/rendering_manager_vulkan.cpp
         rendering/rendering_manager_viewport.cpp
+        rendering/lod_page_cache.cpp
+        rendering/spark_lod_controller.cpp
         rendering/split_view_composition.cpp
         rendering/split_view_service.cpp
         rendering/viewport_artifact_service.cpp

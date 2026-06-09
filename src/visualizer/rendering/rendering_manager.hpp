@@ -19,6 +19,7 @@
 #include "rendering/rendering.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
 #include "rendering_types.hpp"
+#include "spark_lod_controller.hpp"
 #include "split_view_service.hpp"
 #include "viewport_artifact_service.hpp"
 #include "viewport_frame_lifecycle_service.hpp"
@@ -30,11 +31,13 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -100,6 +103,7 @@ namespace lfs::vis {
 
         RenderingManager();
         ~RenderingManager();
+        void setWakeCallback(std::function<void()> callback);
 
         // Initialize rendering resources
         void initialize();
@@ -179,13 +183,7 @@ namespace lfs::vis {
         void markDirty();
         void markDirty(DirtyMask flags);
 
-        [[nodiscard]] bool pollDirtyState() {
-            if (const DirtyMask animation_dirty = animation_state_.pollDirtyState(); animation_dirty) {
-                dirty_mask_.fetch_or(animation_dirty, std::memory_order_relaxed);
-                return true;
-            }
-            return dirty_mask_.load(std::memory_order_relaxed) != 0;
-        }
+        [[nodiscard]] bool pollDirtyState();
 
         void setPivotAnimationEndTime(const std::chrono::steady_clock::time_point end_time) {
             animation_state_.setPivotAnimationEndTime(end_time);
@@ -489,6 +487,12 @@ namespace lfs::vis {
         }
         bool consumeResizeCompleted() { return frame_lifecycle_service_.consumeResizeCompleted(); }
 
+        // LOD management
+        void setLodAvailable(bool available);
+        void setLodEnabled(bool enabled);
+        [[nodiscard]] bool isLodEnabled() const;
+        [[nodiscard]] SparkLodController::Stats getLodStats() const;
+
     private:
         enum class PreviewImageReadback {
             FloatRgb,
@@ -566,6 +570,7 @@ namespace lfs::vis {
         void applySplitModeChange(const SplitViewService::ModeChangeResult& result);
         void queueCameraMetricsRefreshIfStale(SceneManager* scene_manager);
         void invalidateCameraMetricsRequests(bool clear_latest = false);
+        void notifyAsyncLodResultsReady();
         void cameraMetricsWorkerLoop(std::stop_token stop_token);
         void releaseSceneModelResources();
         void releaseSceneRenderResources();
@@ -602,6 +607,10 @@ namespace lfs::vis {
         std::uint64_t viewport_projection_generation_ = 1;
         std::unique_ptr<VksplatViewportRenderer> vksplat_viewport_renderer_;
         std::unique_ptr<PointCloudVulkanRenderer> point_cloud_vulkan_renderer_;
+        std::unique_ptr<SparkLodController> lod_controller_;
+        const lfs::core::SplatData* lod_controller_model_ = nullptr;
+        bool lod_controller_needs_sync_traversal_ = false;
+        std::uint64_t lod_controller_page_map_generation_ = 0;
         // Cached SH0→RGB derivation for the point-cloud Vulkan path. Refreshed
         // only when the source sh0_raw() pointer/size changes so the Vulkan
         // renderer's per-tensor upload cache stays warm across frames.
@@ -616,6 +625,8 @@ namespace lfs::vis {
         VkImageLayout vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         std::uint64_t vulkan_external_viewport_image_generation_ = 0;
         std::uint64_t split_view_image_generation_ = 0;
+        std::mutex wake_callback_mutex_;
+        std::function<void()> wake_callback_;
         glm::ivec2 vulkan_viewport_image_size_{0, 0};
         bool vulkan_viewport_image_flip_y_ = false;
         glm::ivec2 vulkan_gt_comparison_content_size_{0, 0};
@@ -645,6 +656,7 @@ namespace lfs::vis {
         uint64_t camera_metrics_request_generation_ = 0;
         std::chrono::steady_clock::time_point last_camera_metrics_refresh_time_{};
         bool initialized_ = false;
+        bool lod_available_ = false;
 
         ViewportInteractionContext viewport_interaction_context_;
 

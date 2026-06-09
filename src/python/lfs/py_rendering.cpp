@@ -821,6 +821,22 @@ namespace lfs::python {
                      "Compute metrics when jumping to a source camera",
                      {{"Off", "OFF", 0}, {"PSNR", "PSNR", 1}, {"PSNR + SSIM", "PSNR_SSIM", 2}}, 0);
 
+        add_bool(&Proxy::lod_enabled, "lod_enabled", "Enable LOD",
+                 "Enable hierarchical level-of-detail rendering", false);
+        add_bool(&Proxy::lod_debug_colors, "lod_debug_colors", "Debug Colors",
+                 "Color splats by their LOD level for debugging", false);
+        add_float(&Proxy::lod_max_splats, "lod_max_splats", "LOD Budget",
+                  "Maximum number of splats in the dynamic LOD cut",
+                  static_cast<double>(vis::DEFAULT_LOD_MAX_SPLATS), 1.0, 10000000.0);
+        add_float(&Proxy::lod_render_scale, "lod_render_scale", "Render Scale",
+                  "Resolution multiplier for LOD calculations", vis::DEFAULT_LOD_RENDER_SCALE, 0.1, 2.0);
+        add_float(&Proxy::lod_cone_foveation, "lod_cone_foveation", "Cone Foveation",
+                  "Peripheral LOD penalty factor (1.0 = no penalty)", vis::DEFAULT_LOD_CONE_FOVEATION, 0.1, 2.0);
+        add_float(&Proxy::lod_cone_inner_degrees, "lod_cone_inner_degrees", "Cone Inner",
+                  "Inner cone angle in degrees (no penalty inside this angle)", vis::DEFAULT_LOD_CONE_INNER_DEGREES, 0.0, 180.0);
+        add_float(&Proxy::lod_cone_outer_degrees, "lod_cone_outer_degrees", "Cone Outer",
+                  "Outer cone angle in degrees (full penalty beyond this angle)", vis::DEFAULT_LOD_CONE_OUTER_DEGREES, 0.0, 180.0);
+
         add_bool(&Proxy::apply_appearance_correction, "apply_appearance_correction", "Appearance Correction",
                  "Enable PPISP appearance correction", false);
         add_int_enum(&Proxy::ppisp_mode, "ppisp_mode", "Mode", "PPISP correction mode",
@@ -1255,6 +1271,48 @@ namespace lfs::python {
         if (!settings)
             return std::nullopt;
         return PyRenderSettings(std::move(*settings));
+    }
+
+    nb::dict get_lod_stats() {
+        nb::dict result;
+        auto* rm = get_rendering_manager();
+        if (!rm) {
+            result["enabled"] = false;
+            result["selected"] = 0;
+            result["budget"] = 0;
+            result["requested_budget"] = 0;
+            result["levels"] = nb::list();
+            return result;
+        }
+        const auto stats = rm->getLodStats();
+        result["enabled"] = stats.enabled && stats.has_tree;
+        result["active"] = stats.active;
+        result["async_ready"] = stats.async_result_ready;
+        result["selected"] = stats.selected_splats;
+        result["budget"] = stats.max_splats;
+        result["requested_budget"] = stats.requested_max_splats;
+        result["generation"] = stats.generation;
+        result["selection_hash"] = stats.selection_hash;
+        result["model_splats"] = stats.model_splats;
+        result["full_quality_splats"] = stats.full_quality_splats;
+        result["output_size"] = stats.output_size;
+        result["frontier_size"] = stats.frontier_size;
+        result["leaf_count"] = stats.leaf_count;
+        result["budget_limited"] = stats.budget_limited;
+        result["threshold_limited"] = stats.threshold_limited;
+        result["output_limited"] = stats.output_limited;
+        result["full_quality_reference"] = stats.full_quality_reference;
+        result["pixel_scale_limit"] = stats.pixel_scale_limit;
+        result["min_pixel_scale"] = stats.min_pixel_scale;
+        nb::list levels;
+        for (const auto& [level, count] : stats.level_histogram) {
+            nb::dict item;
+            item["level"] = level;
+            item["count"] = count;
+            levels.append(item);
+        }
+        result["levels"] = levels;
+        return result;
     }
 
 } // namespace lfs::python
@@ -1773,6 +1831,8 @@ Args:
             .def("__dir__", &PyRenderSettings::python_dir);
 
         m.def("get_render_settings", &get_render_settings);
+        m.def("get_lod_stats", &get_lod_stats,
+              "Get LOD statistics: {enabled, selected, budget, levels:[{level, count}, ...]}");
     }
 
 } // namespace lfs::python

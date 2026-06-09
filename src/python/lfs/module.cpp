@@ -842,15 +842,10 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "export_scene",
         [](int format, const std::string& path, const std::vector<std::string>& node_names, int sh_degree,
-           const std::optional<std::vector<float>>& rad_lod_ratios, bool rad_flip_y) {
-            std::vector<float> lod_ratios;
-            if (rad_lod_ratios.has_value()) {
-                lod_ratios = rad_lod_ratios.value();
-            }
-            lfs::python::invoke_export(format, path, node_names, sh_degree, lod_ratios, rad_flip_y);
+           bool rad_flip_y) {
+            lfs::python::invoke_export(format, path, node_names, sh_degree, rad_flip_y);
         },
         nb::arg("format"), nb::arg("path"), nb::arg("node_names"), nb::arg("sh_degree"),
-        nb::arg("rad_lod_ratios") = nb::none(),
         nb::arg("rad_flip_y") = false,
         "Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP.");
 
@@ -2081,7 +2076,7 @@ Mesh-to-Splat:
   lf.get_mesh2splat_error()      - Get error message
 
 Splat Simplify:
-  lf.simplify_splats("name", ratio=..., knn_k=..., merge_cap=..., opacity_prune_threshold=...)
+  lf.simplify_splats("name", ratio=..., lod_base=..., opacity_prune_threshold=...)
                                     - Simplify a splat node into a new output node
   lf.simplify_splat_data_with_history(splat_data, ...)
                                     - Simplify a SplatData value and return output + merge tree
@@ -2162,8 +2157,7 @@ Example:
         "build_splat_lod_hierarchy",
         [](nb::object source,
            double ratio,
-           int knn_k,
-           double merge_cap,
+           float lod_base,
            float opacity_prune_threshold,
            std::optional<int> max_levels,
            int min_points,
@@ -2173,8 +2167,7 @@ Example:
             return helper(
                 std::move(source),
                 ratio,
-                knn_k,
-                merge_cap,
+                lod_base,
                 opacity_prune_threshold,
                 py_max_levels,
                 min_points,
@@ -2182,8 +2175,7 @@ Example:
         },
         nb::arg("source") = nb::none(),
         nb::arg("ratio") = 0.5,
-        nb::arg("knn_k") = 16,
-        nb::arg("merge_cap") = 0.5,
+        nb::arg("lod_base") = 2.0f,
         nb::arg("opacity_prune_threshold") = 0.1f,
         nb::arg("max_levels") = nb::none(),
         nb::arg("min_points") = 1,

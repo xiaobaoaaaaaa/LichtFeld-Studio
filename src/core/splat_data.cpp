@@ -551,6 +551,7 @@ namespace lfs::core {
           _deleted(std::move(other._deleted)),
           _deleted_count(other._deleted_count.load(std::memory_order_relaxed)),
           _tensor_allocator(std::move(other._tensor_allocator)),
+          lod_tree(std::move(other.lod_tree)),
           _frozen_ranges(std::move(other._frozen_ranges)) {
         // Reset the moved-from object
         other._active_sh_degree = 0;
@@ -576,6 +577,9 @@ namespace lfs::core {
             _opacity = std::move(other._opacity);
             _densification_info = std::move(other._densification_info);
             _deleted = std::move(other._deleted);
+
+            // Move LOD tree
+            lod_tree = std::move(other.lod_tree);
             _deleted_count.store(other._deleted_count.load(std::memory_order_relaxed),
                                  std::memory_order_relaxed);
             _tensor_allocator = std::move(other._tensor_allocator);

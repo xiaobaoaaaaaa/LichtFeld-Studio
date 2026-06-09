@@ -7,6 +7,8 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <utility>
+#include <vector>
 
 #ifdef max
 #undef max
@@ -267,11 +269,14 @@ void VulkanGSRenderer::executeProjectionForward(
     const _VulkanBuffer& overlay_params,
     const _VulkanBuffer& model_transforms,
     size_t alloc_reserve,
-    bool use_gut_projection) {
+    bool use_gut_projection,
+    const _VulkanBuffer& lod_indices,
+    const _VulkanBuffer& lod_logical_indices,
+    const _VulkanBuffer& lod_levels) {
     PerfTimer::Timer<PerfTimer::ProjectionForward> timer(this);
     DEVICE_GUARD;
 
-    size_t num_splats = buffers.num_splats;
+    const size_t num_splats = static_cast<size_t>(uniforms.num_splats);
 
     bufferMemoryBarrier({
                             {buffers.xyz_ws.deviceBuffer, TRANSFER_COMPUTE_SHADER_WRITE},
@@ -303,33 +308,62 @@ void VulkanGSRenderer::executeProjectionForward(
     bufferMemoryBarrier({{primitive_depth_keys, TRANSFER_COMPUTE_SHADER_WRITE}},
                         COMPUTE_SHADER_READ_WRITE);
 
+    // Ensure transfer writes to optional LOD buffers are visible to projection.
+    if (lod_indices.buffer != VK_NULL_HANDLE ||
+        lod_logical_indices.buffer != VK_NULL_HANDLE ||
+        lod_levels.buffer != VK_NULL_HANDLE) {
+        std::vector<std::pair<_VulkanBuffer, BarrierMask>> barriers;
+        if (lod_indices.buffer != VK_NULL_HANDLE) {
+            barriers.push_back({lod_indices, TRANSFER_COMPUTE_SHADER_WRITE});
+        }
+        if (lod_logical_indices.buffer != VK_NULL_HANDLE) {
+            barriers.push_back({lod_logical_indices, TRANSFER_COMPUTE_SHADER_WRITE});
+        }
+        if (lod_levels.buffer != VK_NULL_HANDLE) {
+            barriers.push_back({lod_levels, TRANSFER_COMPUTE_SHADER_WRITE});
+        }
+        bufferMemoryBarrier(barriers, COMPUTE_SHADER_READ);
+    }
+
+    const _VulkanBuffer lod_indices_binding =
+        (lod_indices.buffer != VK_NULL_HANDLE) ? lod_indices : primitive_depth_keys;
+    const _VulkanBuffer lod_logical_indices_binding =
+        (lod_logical_indices.buffer != VK_NULL_HANDLE) ? lod_logical_indices : lod_indices_binding;
+    const _VulkanBuffer lod_levels_binding =
+        (lod_levels.buffer != VK_NULL_HANDLE) ? lod_levels : primitive_depth_keys;
+
+    std::vector<_VulkanBuffer> projection_buffers = {
+        // inputs
+        buffers.xyz_ws.deviceBuffer,
+        buffers.sh0.deviceBuffer,
+        buffers.shN.deviceBuffer,
+        buffers.rotations.deviceBuffer,
+        buffers.scaling_raw.deviceBuffer,
+        buffers.opacity_raw.deviceBuffer,
+        // outputs
+        resizeDeviceBuffer(buffers.tiles_touched, alloc_size),
+        resizeDeviceBuffer(buffers.rect_tile_space, alloc_size),
+        resizeDeviceBuffer(buffers.radii, alloc_size),
+        resizeDeviceBuffer(buffers.xy_vs, 2 * alloc_size),
+        resizeDeviceBuffer(buffers.depths, alloc_size),
+        resizeDeviceBuffer(buffers.inv_cov_vs_opacity, 4 * alloc_size),
+        resizeDeviceBuffer(buffers.rgb, 3 * alloc_size),
+        resizeDeviceBuffer(buffers.overlay_flags, alloc_size),
+        transform_indices,
+        node_mask,
+        overlay_params,
+        model_transforms,
+        primitive_depth_keys,
+        lod_indices_binding,
+        lod_logical_indices_binding,
+        lod_levels_binding,
+    };
+
     executeCompute(
         {{num_splats, SUBGROUP_SIZE}},
         &uniforms, sizeof(uniforms),
         use_gut_projection ? pipeline_projection_forward_3dgut : pipeline_projection_forward,
-        {
-            // inputs
-            buffers.xyz_ws.deviceBuffer,
-            buffers.sh0.deviceBuffer,
-            buffers.shN.deviceBuffer,
-            buffers.rotations.deviceBuffer,
-            buffers.scaling_raw.deviceBuffer,
-            buffers.opacity_raw.deviceBuffer,
-            // outputs
-            resizeDeviceBuffer(buffers.tiles_touched, alloc_size),
-            resizeDeviceBuffer(buffers.rect_tile_space, alloc_size),
-            resizeDeviceBuffer(buffers.radii, alloc_size),
-            resizeDeviceBuffer(buffers.xy_vs, 2 * alloc_size),
-            resizeDeviceBuffer(buffers.depths, alloc_size),
-            resizeDeviceBuffer(buffers.inv_cov_vs_opacity, 4 * alloc_size),
-            resizeDeviceBuffer(buffers.rgb, 3 * alloc_size),
-            resizeDeviceBuffer(buffers.overlay_flags, alloc_size),
-            transform_indices,
-            node_mask,
-            overlay_params,
-            model_transforms,
-            primitive_depth_keys,
-        });
+        projection_buffers);
 }
 
 void VulkanGSRenderer::executeGenerateKeys(
@@ -338,7 +372,7 @@ void VulkanGSRenderer::executeGenerateKeys(
     PerfTimer::Timer<PerfTimer::GenerateKeys> timer(this);
     DEVICE_GUARD;
 
-    const size_t num_elements = buffers.num_splats;
+    const size_t num_elements = static_cast<size_t>(uniforms.num_splats);
     // executeCalculateIndexBufferOffset has synchronously read the cumsum tail,
     // so num_indices is the exact tile-instance count for this frame.
     const size_t capacity = buffers.num_indices;
@@ -910,7 +944,7 @@ void VulkanGSRenderer::executeCalculateIndexBufferOffset(
     VulkanGSPipelineBuffers& buffers) {
     PerfTimer::Timer<PerfTimer::CalculateIndexBufferOffset> timer(this);
 
-    const size_t num_elements = buffers.num_splats;
+    const size_t num_elements = static_cast<size_t>(uniforms.num_splats);
     if (num_elements == 0) {
         buffers.num_indices = 0;
         return;
@@ -958,7 +992,7 @@ void VulkanGSRenderer::executePrepareTileSort(
         uint32_t sort_partition_size;
         uint32_t pad0;
     } prepare_uniforms{
-        static_cast<uint32_t>(buffers.num_splats),
+        uniforms.num_splats,
         static_cast<uint32_t>(
             std::min<std::size_t>(buffers.num_indices,
                                   static_cast<std::size_t>(std::numeric_limits<uint32_t>::max()))),
@@ -1274,7 +1308,7 @@ void VulkanGSRenderer::executeSortPrimitivesByDepth(
     VulkanGSPipelineBuffers& buffers) {
     PerfTimer::Timer<PerfTimer::SortPrimitivesByDepth> timer(this);
 
-    const size_t num_splats = buffers.num_splats;
+    const size_t num_splats = static_cast<size_t>(uniforms.num_splats);
     if (num_splats == 0)
         return;
 
@@ -1427,7 +1461,7 @@ void VulkanGSRenderer::executeApplyDepthOrdering(
     PerfTimer::Timer<PerfTimer::ApplyDepthOrdering> timer(this);
     DEVICE_GUARD;
 
-    const size_t num_splats = buffers.num_splats;
+    const size_t num_splats = static_cast<size_t>(uniforms.num_splats);
     if (num_splats == 0)
         return;
 

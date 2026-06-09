@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <expected>
 #include <format>
 #include <optional>
@@ -34,6 +35,28 @@ namespace lfs::vis {
 
     namespace {
         constexpr auto kVulkanViewportResizeTrainingPauseWait = std::chrono::milliseconds(300);
+
+        struct LodObjectFrame {
+            glm::mat4 object_to_view{1.0f};
+            float object_scale = 1.0f;
+        };
+
+        [[nodiscard]] LodObjectFrame makeLodObjectFrame(
+            const lfs::rendering::FrameView& frame_view,
+            const lfs::rendering::GaussianSceneState& scene) {
+            glm::mat4 object_to_world(1.0f);
+            if (scene.model_transforms && !scene.model_transforms->empty()) {
+                object_to_world = scene.model_transforms->front();
+            }
+
+            const float sx = glm::length(glm::vec3(object_to_world[0]));
+            const float sy = glm::length(glm::vec3(object_to_world[1]));
+            const float sz = glm::length(glm::vec3(object_to_world[2]));
+            const float object_scale = std::max({sx, sy, sz, 1.0f});
+
+            return {.object_to_view = frame_view.getViewMatrix() * object_to_world,
+                    .object_scale = object_scale};
+        }
 
         class ScopedTemporaryTrainingPause {
         public:
@@ -681,6 +704,9 @@ namespace lfs::vis {
         }
 
         DirtyMask frame_dirty = dirty_mask_.exchange(0);
+        if (lod_controller_ && lod_controller_->hasReadyResults()) {
+            frame_dirty |= DirtyFlag::CAMERA;
+        }
         constexpr DirtyMask projection_dirty =
             DirtyFlag::CAMERA | DirtyFlag::SPLATS | DirtyFlag::VIEWPORT | DirtyFlag::SPLIT_VIEW;
         if ((frame_dirty & projection_dirty) != 0) {
@@ -968,6 +994,38 @@ namespace lfs::vis {
             auto request = request_override
                                ? *request_override
                                : buildViewportRenderRequest(frame_ctx, panel_size, &source_viewport, panel_id);
+            std::vector<std::uint32_t> lod_touched_chunks;
+            if (lod_controller_ && lod_controller_->hasTree()) {
+                const auto& selected = settings_.lod_enabled
+                                           ? lod_controller_->selectedIndices()
+                                           : lod_controller_->fullQualityIndices();
+                if (!selected.empty()) {
+                    request.lod_indices = selected.data();
+                    if (lod_controller_->pageMappingActive()) {
+                        const auto& logical = settings_.lod_enabled
+                                                  ? lod_controller_->selectedLogicalIndices()
+                                                  : lod_controller_->fullQualityLogicalIndices();
+                        if (logical.size() == selected.size()) {
+                            request.lod_logical_indices = logical.data();
+                        }
+                    }
+                    if (settings_.lod_debug_colors) {
+                        const auto& levels = settings_.lod_enabled
+                                                 ? lod_controller_->selectedLevels()
+                                                 : lod_controller_->fullQualityLevels();
+                        if (levels.size() == selected.size()) {
+                            request.lod_levels = levels.data();
+                        }
+                    }
+                    request.lod_count = selected.size();
+                    request.lod_selection_hash = lod_controller_->selectionHash();
+                    request.lod_generation = lod_controller_->statsGeneration();
+                    lod_touched_chunks = lod_controller_->touchedChunks();
+                    request.lod_touched_chunks = lod_touched_chunks.data();
+                    request.lod_touched_chunk_count = lod_touched_chunks.size();
+                    request.lod_debug_mode = settings_.lod_debug_colors;
+                }
+            }
             std::vector<glm::mat4> transforms_storage;
             if (model_transforms_override) {
                 request.scene.model_transforms = model_transforms_override;
@@ -1523,6 +1581,116 @@ namespace lfs::vis {
             request.raster_backend =
                 lfs::rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut);
             request.gut = lfs::rendering::isGutBackend(request.raster_backend);
+            std::vector<std::uint32_t> lod_touched_chunks;
+            if (lfs::rendering::isVkSplatBackend(request.raster_backend) &&
+                context.vulkan_context &&
+                !vksplat_viewport_renderer_) {
+                vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+            }
+
+            const bool has_lod_tree = model && model->lod_tree && model->lod_tree->has_tree();
+            if (has_lod_tree) {
+                const auto create_lod_controller = [this]() {
+                    auto controller = std::make_unique<SparkLodController>();
+                    controller->setReadyCallback([this] {
+                        notifyAsyncLodResultsReady();
+                    });
+                    return controller;
+                };
+                if (!lod_controller_) {
+                    lod_controller_ = create_lod_controller();
+                }
+                if (lod_controller_model_ != model) {
+                    lod_controller_.reset();
+                    lod_controller_ = create_lod_controller();
+                    lod_controller_->attach(*model);
+                    lod_controller_model_ = model;
+                    lod_controller_needs_sync_traversal_ = true;
+                    lod_controller_page_map_generation_ = 0;
+                }
+                if (vksplat_viewport_renderer_) {
+                    if (auto page_snapshot = vksplat_viewport_renderer_->ensureLodPageCacheSnapshot(*model);
+                        page_snapshot &&
+                        page_snapshot->generation != lod_controller_page_map_generation_) {
+                        lod_controller_->applyPageMaps(page_snapshot->page_to_chunk,
+                                                       page_snapshot->chunk_to_page);
+                        lod_controller_page_map_generation_ = page_snapshot->generation;
+                        lod_controller_needs_sync_traversal_ = true;
+                    }
+                }
+
+                if (settings_.lod_enabled) {
+                    SparkLodController::LodParameters params;
+                    params.max_splats = settings_.lod_max_splats;
+                    params.lod_render_scale = settings_.lod_render_scale;
+                    params.behind_camera_penalty = settings_.lod_behind_camera_penalty;
+                    params.cone_foveation = settings_.lod_cone_foveation;
+                    params.cone_inner_degrees = settings_.lod_cone_inner_degrees;
+                    params.cone_outer_degrees = settings_.lod_cone_outer_degrees;
+                    const LodObjectFrame lod_frame = makeLodObjectFrame(request.frame_view, request.scene);
+                    params.object_scale = lod_frame.object_scale;
+
+                    // Compute pixel_scale_limit dynamically from camera FOV and viewport size,
+                    // matching Spark's runtime computation.
+                    {
+                        const auto& fv = request.frame_view;
+                        if (fv.orthographic) {
+                            params.pixel_scale_limit = fv.ortho_scale / static_cast<float>(fv.size.y);
+                        } else {
+                            float vfov = lfs::rendering::focalLengthToVFov(fv.focal_length_mm);
+                            float half_tan_fov = std::tan(glm::radians(vfov) * 0.5f);
+                            params.pixel_scale_limit = (2.0f * half_tan_fov) / static_cast<float>(fv.size.y);
+                        }
+                        params.pixel_scale_limit *= params.lod_render_scale;
+                    }
+
+                    if (lod_controller_needs_sync_traversal_) {
+                        lod_controller_->update(lod_frame.object_to_view, params);
+                        lod_controller_needs_sync_traversal_ = false;
+                    } else {
+                        lod_controller_->swapAsyncResults();
+                        lod_controller_->updateAsync(lod_frame.object_to_view, params);
+                    }
+                } else {
+                    lod_controller_->activateFullQualityReference();
+                }
+
+                const auto& selected = settings_.lod_enabled
+                                           ? lod_controller_->selectedIndices()
+                                           : lod_controller_->fullQualityIndices();
+                if (!selected.empty()) {
+                    request.lod_indices = selected.data();
+                    if (lod_controller_->pageMappingActive()) {
+                        const auto& logical = settings_.lod_enabled
+                                                  ? lod_controller_->selectedLogicalIndices()
+                                                  : lod_controller_->fullQualityLogicalIndices();
+                        if (logical.size() == selected.size()) {
+                            request.lod_logical_indices = logical.data();
+                        }
+                    }
+                    if (settings_.lod_debug_colors) {
+                        const auto& levels = settings_.lod_enabled
+                                                 ? lod_controller_->selectedLevels()
+                                                 : lod_controller_->fullQualityLevels();
+                        if (levels.size() == selected.size()) {
+                            request.lod_levels = levels.data();
+                        }
+                    }
+                    request.lod_count = selected.size();
+                    request.lod_selection_hash = lod_controller_->selectionHash();
+                    request.lod_generation = lod_controller_->statsGeneration();
+                    lod_touched_chunks = lod_controller_->touchedChunks();
+                    request.lod_touched_chunks = lod_touched_chunks.data();
+                    request.lod_touched_chunk_count = lod_touched_chunks.size();
+                }
+                request.lod_debug_mode = settings_.lod_debug_colors;
+            } else {
+                lod_controller_.reset();
+                lod_controller_model_ = nullptr;
+                lod_controller_needs_sync_traversal_ = false;
+                lod_controller_page_map_generation_ = 0;
+            }
+
             if (lfs::rendering::isVkSplatBackend(request.raster_backend)) {
                 if (!context.vulkan_context) {
                     render_error = "VkSplat backend requires an active Vulkan context";

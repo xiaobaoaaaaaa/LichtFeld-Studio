@@ -19,6 +19,13 @@
 namespace lfs::vis {
 
     constexpr int GPU_ALIGNMENT = 16;
+    inline constexpr std::size_t DEFAULT_LOD_MAX_SPLATS = 2'500'000;
+    inline constexpr float DEFAULT_LOD_PIXEL_SCALE_LIMIT = 0.0001f;
+    inline constexpr float DEFAULT_LOD_RENDER_SCALE = 1.0f;
+    inline constexpr float DEFAULT_LOD_BEHIND_CAMERA_FOVEATION = 0.2f;
+    inline constexpr float DEFAULT_LOD_CONE_FOVEATION = 0.4f;
+    inline constexpr float DEFAULT_LOD_CONE_INNER_DEGREES = 90.0f;
+    inline constexpr float DEFAULT_LOD_CONE_OUTER_DEGREES = 120.0f;
 
     enum class SplitViewMode {
         Disabled,
@@ -256,6 +263,17 @@ namespace lfs::vis {
         glm::vec3 depth_filter_min = glm::vec3(-50.0f, -10000.0f, 0.0f);
         glm::vec3 depth_filter_max = glm::vec3(50.0f, 10000.0f, 100.0f);
         lfs::geometry::EuclideanTransform depth_filter_transform;
+
+        // ---- LOD (Spark-style) ----
+        bool lod_enabled = false;           // Master toggle
+        bool lod_auto_enable_rad = false; // Keep LOD off by default, even for .rad
+        size_t lod_max_splats = DEFAULT_LOD_MAX_SPLATS; // Spark desktop default
+        float lod_render_scale = DEFAULT_LOD_RENDER_SCALE;
+        float lod_behind_camera_penalty = DEFAULT_LOD_BEHIND_CAMERA_FOVEATION;
+        float lod_cone_foveation = DEFAULT_LOD_CONE_FOVEATION;
+        float lod_cone_inner_degrees = DEFAULT_LOD_CONE_INNER_DEGREES;
+        float lod_cone_outer_degrees = DEFAULT_LOD_CONE_OUTER_DEGREES;
+        bool lod_debug_colors = false;      // Per-level color tinting
     };
 
     inline void sanitizeDepthViewSettings(RenderSettings& settings) {
