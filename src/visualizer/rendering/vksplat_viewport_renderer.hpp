@@ -218,6 +218,7 @@ namespace lfs::vis {
         struct ComposePipeline;
         struct InputBindingResult {
             bool uses_temporary_upload_slot = false;
+            bool model_snapshot_changed = false;
         };
 
         [[nodiscard]] std::expected<void, std::string> ensureInitialized(VulkanContext& context);
@@ -531,6 +532,10 @@ namespace lfs::vis {
         // Whether the last main render used the macro-tile chain; the
         // selection-overlay re-render reuses its sorted buffers and must match.
         bool last_render_used_macro_chain_ = false;
+        // The first frame after a model/input reset needs the synchronous
+        // render-tile chain so the viewport never presents the macro chain's
+        // zero-count warm-up frame.
+        bool macro_chain_warmup_pending_ = true;
         // Visible-splat capacity high-water mark, fed by the deferred raw emit
         // count (decays /8 per poll, grows after a clamped frame). 0 until the
         // first readback lands; the first frames size at the render domain.

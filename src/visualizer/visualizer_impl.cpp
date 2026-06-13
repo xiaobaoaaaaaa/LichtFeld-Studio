@@ -953,6 +953,14 @@ namespace lfs::vis {
         cmd::SaveAsset::when([this](const auto& cmd) {
             python::invoke_save_asset(cmd.node_name);
         });
+
+        cmd::SaveAssetById::when([this](const auto& cmd) {
+            if (!scene_manager_)
+                return;
+            const auto* node = scene_manager_->getScene().getNodeById(static_cast<core::NodeId>(cmd.node_id));
+            if (node)
+                python::invoke_save_asset(node->name);
+        });
     }
 
     bool VisualizerImpl::initialize() {

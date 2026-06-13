@@ -1561,6 +1561,7 @@ namespace lfs::vis {
         buffers_.num_indices = 0;
         buffers_.num_indices_high_water = 0;
         buffers_.is_unsorted_1 = true;
+        macro_chain_warmup_pending_ = true;
         visible_high_water_ = 0;
         visible_clamp_pending_ = false;
         instance_clamp_pending_ = false;
@@ -1708,6 +1709,7 @@ namespace lfs::vis {
         ring_completion_values_ = {};
         next_ring_slot_ = 0;
         current_input_sh_degree_ = -1;
+        macro_chain_warmup_pending_ = true;
         compose_.reset();
         buffers_ = {};
         uploaded_lod_indices_ = {};
@@ -4306,7 +4308,10 @@ namespace lfs::vis {
             }
             current_input_sh_degree_ = shN_storage ? splat_data.get_max_sh_degree()
                                                    : effective_upload_sh_degree;
-            return InputBindingResult{.uses_temporary_upload_slot = false};
+            return InputBindingResult{
+                .uses_temporary_upload_slot = false,
+                .model_snapshot_changed = input_snapshot_changed,
+            };
         }
 
         if (slot.buffer.buffer != VK_NULL_HANDLE) {
@@ -6347,6 +6352,9 @@ namespace lfs::vis {
         if (!input_binding) {
             return std::unexpected(input_binding.error());
         }
+        if (input_binding->model_snapshot_changed) {
+            macro_chain_warmup_pending_ = true;
+        }
         if (lod_request_active) {
             if (auto ok = ensureGpuLodTreeStorage(splat_data); !ok) {
                 static std::string last_gpu_lod_storage_error;
@@ -6598,7 +6606,7 @@ namespace lfs::vis {
         // readback gives no ordering against the trainer's in-place writes, so
         // it reads the model mid-mutation and flickers. The legacy chain's
         // synchronous readback orders the read after the writes; use it then.
-        const bool higs_active =
+        const bool higs_candidate =
             !request.gut && renderer_.supportsFloat16Storage() && !synchronize_input_upload &&
             !depth_capture_mode_;
         // Depth view colorizes the per-pixel median depth. mip_filter bit 1
@@ -6609,6 +6617,8 @@ namespace lfs::vis {
         if (request.depth_view) {
             uniforms.mip_filter |= 2u;
         }
+        const bool higs_warmup_frame = higs_candidate && macro_chain_warmup_pending_;
+        const bool higs_active = higs_candidate && !higs_warmup_frame;
         // Capture forces the non-batched per-pixel rasterizer (full pixel_depth
         // coverage); the batched compose only writes a subset of pixels.
         renderer_.setDepthCapture(depth_capture_mode_);
@@ -7122,6 +7132,9 @@ namespace lfs::vis {
         renderer_.tagDeferredVisibleCountReadback(render_complete_timeline_, completion_value);
         renderer_.tagDeferredLodSelectionReadback(render_complete_timeline_, completion_value);
         renderer_.tagDeferredInstanceCountReadback(render_complete_timeline_, completion_value);
+        if (higs_warmup_frame) {
+            macro_chain_warmup_pending_ = false;
+        }
         ring_completion_values_[ring_slot] = completion_value;
         // The pre-render submit already requested this frame's chunks and
         // refreshed protection stamps; a second submit here would only burn
