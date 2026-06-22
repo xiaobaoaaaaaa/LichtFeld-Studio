@@ -294,6 +294,7 @@ namespace lfs::vis::gui {
         menu_toolbar_ = nullptr;
         menu_window_controls_ = nullptr;
         body_el_ = nullptr;
+        clearTitlebarDragRegion();
     }
 
     void RmlMenuBar::suspend() {
@@ -303,10 +304,7 @@ namespace lfs::vis::gui {
         last_mouse_y_ = 0;
         last_hovered_label_ = -1;
         last_toolbar_hovered_ = false;
-        titlebar_drag_pending_ = false;
-        has_titlebar_click_ = false;
-        if (auto* wm = lfs::vis::services().windowOrNull(); wm && wm->isWindowDragActive())
-            wm->endWindowDrag();
+        clearTitlebarDragRegion();
         tooltip_.setHover({}, nullptr);
 
         if (open_menu_index_ >= 0)
@@ -335,10 +333,7 @@ namespace lfs::vis::gui {
         menu_window_controls_ = nullptr;
         body_el_ = nullptr;
         tooltip_.setHover({}, nullptr);
-        titlebar_drag_pending_ = false;
-        has_titlebar_click_ = false;
-        if (auto* wm = lfs::vis::services().windowOrNull(); wm && wm->isWindowDragActive())
-            wm->endWindowDrag();
+        clearTitlebarDragRegion();
         base_rcss_.clear();
         has_theme_signature_ = false;
         wants_input_ = false;
@@ -490,70 +485,15 @@ namespace lfs::vis::gui {
             tooltip_.setHover({}, nullptr);
 
         const float dp_ratio = rml_manager_ ? rml_manager_->getDpRatio() : 1.0f;
-        constexpr float kDoubleClickSeconds = 0.35f;
-        constexpr float kDoubleClickDistancePx = 6.0f;
-        constexpr float kDragStartDistancePx = 4.0f;
         const bool in_free_titlebar =
             !is_open &&
             hovered_label < 0 &&
             !hovered_toolbar_btn &&
             my >= 0.0f &&
             my < bar_height_ * dp_ratio;
-        if (auto* wm = lfs::vis::services().windowOrNull(); wm && wm->isWindowDragActive()) {
-            if (input.mouse_down[0]) {
-                wm->updateWindowDrag();
-                wants_input_ = true;
-                return;
-            }
-            wm->endWindowDrag();
-        }
-        if (titlebar_drag_pending_) {
-            wants_input_ = true;
-            if (!input.mouse_down[0]) {
-                titlebar_drag_pending_ = false;
-                return;
-            }
-
-            const float dx = mx - titlebar_drag_start_x_;
-            const float dy = my - titlebar_drag_start_y_;
-            if ((dx * dx + dy * dy) >= (kDragStartDistancePx * kDragStartDistancePx)) {
-                titlebar_drag_pending_ = false;
-                if (auto* wm = lfs::vis::services().windowOrNull()) {
-                    wm->beginWindowDrag();
-                    wm->updateWindowDrag();
-                }
-            }
-            return;
-        }
-        if (input.mouse_clicked[0] && in_free_titlebar) {
-            const auto now = std::chrono::steady_clock::now();
-            const float dx = mx - last_titlebar_click_x_;
-            const float dy = my - last_titlebar_click_y_;
-            const bool is_double_click =
-                has_titlebar_click_ &&
-                std::chrono::duration<float>(now - last_titlebar_click_time_).count() <= kDoubleClickSeconds &&
-                (dx * dx + dy * dy) <= (kDoubleClickDistancePx * kDoubleClickDistancePx);
-
-            if (is_double_click) {
-                if (auto* wm = lfs::vis::services().windowOrNull())
-                    wm->toggleMaximized();
-                has_titlebar_click_ = false;
-                wants_input_ = true;
-                return;
-            }
-
-            titlebar_drag_pending_ = true;
-            titlebar_drag_start_x_ = mx;
-            titlebar_drag_start_y_ = my;
-            last_titlebar_click_time_ = now;
-            last_titlebar_click_x_ = mx;
-            last_titlebar_click_y_ = my;
-            has_titlebar_click_ = true;
+        if (in_free_titlebar && (input.mouse_clicked[0] || input.mouse_down[0])) {
             wants_input_ = true;
             return;
-        } else if (input.mouse_clicked[0]) {
-            titlebar_drag_pending_ = false;
-            has_titlebar_click_ = false;
         }
 
         if (is_open) {
@@ -639,6 +579,7 @@ namespace lfs::vis::gui {
         open_menu_index_ = index;
         open_submenu_index_ = -1;
         open_menu_idname_ = current_idnames_[index];
+        clearTitlebarDragRegion();
 
         MenuDropdownContent content;
         content.menu_idname = current_idnames_[index];
@@ -883,6 +824,50 @@ namespace lfs::vis::gui {
         return find_button(menu_window_controls_);
     }
 
+    void RmlMenuBar::clearTitlebarDragRegion() {
+        if (auto* wm = lfs::vis::services().windowOrNull())
+            wm->clearTitlebarDragRegion();
+    }
+
+    void RmlMenuBar::updateTitlebarDragRegion(const int bar_height_px) {
+        auto* wm = lfs::vis::services().windowOrNull();
+        if (!wm)
+            return;
+        if (open_menu_index_ >= 0 || bar_height_px <= 0) {
+            wm->clearTitlebarDragRegion();
+            return;
+        }
+
+        const auto append_element = [](std::vector<lfs::vis::WindowManager::HitTestRect>& rects,
+                                       Rml::Element* element) {
+            if (!element)
+                return;
+
+            const auto offset = element->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto size = element->GetBox().GetSize(Rml::BoxArea::Border);
+            const int x1 = static_cast<int>(std::floor(offset.x));
+            const int y1 = static_cast<int>(std::floor(offset.y));
+            const int x2 = static_cast<int>(std::ceil(offset.x + size.x));
+            const int y2 = static_cast<int>(std::ceil(offset.y + size.y));
+            if (x2 <= x1 || y2 <= y1)
+                return;
+
+            rects.push_back({
+                .x = x1,
+                .y = y1,
+                .w = x2 - x1,
+                .h = y2 - y1,
+            });
+        };
+
+        std::vector<lfs::vis::WindowManager::HitTestRect> excluded_rects;
+        excluded_rects.reserve(3);
+        append_element(excluded_rects, menu_items_);
+        append_element(excluded_rects, menu_toolbar_);
+        append_element(excluded_rects, menu_window_controls_);
+        wm->setTitlebarDragRegion(bar_height_px, std::move(excluded_rects));
+    }
+
     void RmlMenuBar::rebuildDropdownDOM() {
         if (!dropdown_container_ || !dropdown_popup_ || !dropdown_overlay_ || !menu_items_)
             return;
@@ -980,6 +965,7 @@ namespace lfs::vis::gui {
             }
             rml_context_->Update();
         }
+        updateTitlebarDragRegion(bar_h);
 
         rml_manager_->queueCachedVulkanContext({
             .context = rml_context_,

@@ -9,7 +9,6 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 
 #include <RmlUi/Core/DataModelHandle.h>
-#include <chrono>
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -125,6 +124,8 @@ namespace lfs::vis::gui {
         void rebuildToolbarButtons();
         void dispatchToolbarAction(const std::string& action, const std::string& value);
         Rml::Element* toolbarButtonAtPoint(float x, float y) const;
+        void updateTitlebarDragRegion(int bar_height_px);
+        void clearTitlebarDragRegion();
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
@@ -165,13 +166,6 @@ namespace lfs::vis::gui {
         int last_mouse_y_ = 0;
         int last_hovered_label_ = -1;
         bool last_toolbar_hovered_ = false;
-        bool titlebar_drag_pending_ = false;
-        float titlebar_drag_start_x_ = 0.0f;
-        float titlebar_drag_start_y_ = 0.0f;
-        bool has_titlebar_click_ = false;
-        std::chrono::steady_clock::time_point last_titlebar_click_time_{};
-        float last_titlebar_click_x_ = 0.0f;
-        float last_titlebar_click_y_ = 0.0f;
         int last_ctx_w_ = 0;
         int last_ctx_h_ = 0;
         int last_document_h_ = 0;

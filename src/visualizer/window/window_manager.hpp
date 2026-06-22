@@ -23,6 +23,13 @@ namespace lfs::vis {
 
     class WindowManager {
     public:
+        struct HitTestRect {
+            int x = 0;
+            int y = 0;
+            int w = 0;
+            int h = 0;
+        };
+
         WindowManager(const std::string& title, int width, int height,
                       int monitor_x = 0, int monitor_y = 0,
                       int monitor_width = 0, int monitor_height = 0,
@@ -52,10 +59,10 @@ namespace lfs::vis {
         bool isMaximized() const;
         void minimize();
         void toggleMaximized();
-        bool isWindowDragActive() const { return manual_window_drag_active_; }
-        void beginWindowDrag();
-        void updateWindowDrag();
-        void endWindowDrag();
+        void setTitlebarDragRegion(int height_px, std::vector<HitTestRect> excluded_rects);
+        void clearTitlebarDragRegion();
+        [[nodiscard]] bool isTitlebarDragPoint(int x, int y) const;
+        [[nodiscard]] bool usesEventDrivenTitlebarDrag() const { return native_titlebar_move_available_; }
         void setFullscreen(bool fullscreen);
         GraphicsBackend graphicsBackend() const { return graphics_backend_; }
         bool isVulkan() const { return true; }
@@ -81,9 +88,10 @@ namespace lfs::vis {
         bool is_fullscreen_ = false;
         glm::ivec2 windowed_pos_{0, 0};
         glm::ivec2 windowed_size_{1280, 720};
-        bool manual_window_drag_active_ = false;
-        glm::ivec2 manual_drag_window_pos_{0, 0};
-        glm::vec2 manual_drag_mouse_pos_{0.0f, 0.0f};
+        int titlebar_drag_height_px_ = 0;
+        std::vector<HitTestRect> titlebar_drag_excluded_rects_;
+        bool native_titlebar_move_available_ = false;
+        bool pending_titlebar_double_click_ = false;
         bool should_close_ = false;
 
         static void* callback_handler_;
@@ -91,6 +99,9 @@ namespace lfs::vis {
         input::InputRouter input_router_;
         FrameInputBuffer frame_input_;
         std::vector<std::string> pending_drop_files_;
+
+        void beginTitlebarNativeMove();
+        void flushPendingTitlebarDoubleClick();
     };
 
 } // namespace lfs::vis

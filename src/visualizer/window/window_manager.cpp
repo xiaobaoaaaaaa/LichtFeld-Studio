@@ -11,11 +11,18 @@
 #include "vulkan_context.hpp"
 #include "vulkan_loader_probe.hpp"
 #include <SDL3/SDL.h>
+#if defined(__linux__)
+#include <X11/Xatom.h>
+#include <X11/Xlib.h>
+#endif
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <imgui_impl_sdl3.h>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <imgui.h>
 
 namespace lfs::vis {
@@ -112,11 +119,78 @@ namespace lfs::vis {
             return haystack && needle && std::strstr(haystack, needle) != nullptr;
         }
 
+#if defined(__linux__)
+        bool getX11WindowHandle(SDL_Window* const window, Display*& display, ::Window& xwindow) {
+            if (!window)
+                return false;
+
+            const SDL_PropertiesID props = SDL_GetWindowProperties(window);
+            if (!props)
+                return false;
+
+            display = static_cast<Display*>(
+                SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr));
+            xwindow = static_cast<::Window>(
+                SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0));
+            return display != nullptr && xwindow != 0;
+        }
+
+        bool hasX11NativeMoveSupport(SDL_Window* const window) {
+            Display* display = nullptr;
+            ::Window xwindow = 0;
+            return getX11WindowHandle(window, display, xwindow);
+        }
+
+        bool requestX11WindowMove(SDL_Window* const window) {
+            Display* display = nullptr;
+            ::Window xwindow = 0;
+            if (!getX11WindowHandle(window, display, xwindow))
+                return false;
+
+            float global_x = 0.0f;
+            float global_y = 0.0f;
+            SDL_GetGlobalMouseState(&global_x, &global_y);
+
+            const Atom moveresize = XInternAtom(display, "_NET_WM_MOVERESIZE", False);
+            if (moveresize == None)
+                return false;
+
+            XEvent event{};
+            event.xclient.type = ClientMessage;
+            event.xclient.display = display;
+            event.xclient.window = xwindow;
+            event.xclient.message_type = moveresize;
+            event.xclient.format = 32;
+            event.xclient.data.l[0] = static_cast<long>(std::lround(global_x));
+            event.xclient.data.l[1] = static_cast<long>(std::lround(global_y));
+            event.xclient.data.l[2] = 8; // _NET_WM_MOVERESIZE_MOVE
+            event.xclient.data.l[3] = 1; // left mouse button
+            event.xclient.data.l[4] = 1; // normal application source
+
+            XUngrabPointer(display, CurrentTime);
+            const int sent = XSendEvent(display,
+                                        DefaultRootWindow(display),
+                                        False,
+                                        SubstructureRedirectMask | SubstructureNotifyMask,
+                                        &event);
+            XFlush(display);
+            return sent != 0;
+        }
+#else
+        bool hasX11NativeMoveSupport(SDL_Window*) {
+            return false;
+        }
+
+        bool requestX11WindowMove(SDL_Window*) {
+            return false;
+        }
+#endif
+
         SDL_HitTestResult SDLCALL borderlessWindowHitTest(SDL_Window* window, const SDL_Point* const area, void* data) {
-            const auto* const self = static_cast<WindowManager*>(data);
+            auto* const self = static_cast<WindowManager*>(data);
             if (!self || !area)
                 return SDL_HITTEST_NORMAL;
-            if (self->isFullscreen() || self->isMaximized())
+            if (self->isFullscreen())
                 return SDL_HITTEST_NORMAL;
 
             glm::ivec2 size = self->getWindowSize();
@@ -129,22 +203,30 @@ namespace lfs::vis {
             const bool top = area->y >= 0 && area->y < kResizeBorder;
             const bool bottom = area->y >= size.y - kResizeBorder && area->y < size.y;
 
-            if (top && left)
-                return SDL_HITTEST_RESIZE_TOPLEFT;
-            if (top && right)
-                return SDL_HITTEST_RESIZE_TOPRIGHT;
-            if (bottom && left)
-                return SDL_HITTEST_RESIZE_BOTTOMLEFT;
-            if (bottom && right)
-                return SDL_HITTEST_RESIZE_BOTTOMRIGHT;
-            if (left)
-                return SDL_HITTEST_RESIZE_LEFT;
-            if (right)
-                return SDL_HITTEST_RESIZE_RIGHT;
-            if (top)
-                return SDL_HITTEST_RESIZE_TOP;
-            if (bottom)
-                return SDL_HITTEST_RESIZE_BOTTOM;
+            if (!self->isMaximized()) {
+                if (top && left)
+                    return SDL_HITTEST_RESIZE_TOPLEFT;
+                if (top && right)
+                    return SDL_HITTEST_RESIZE_TOPRIGHT;
+                if (bottom && left)
+                    return SDL_HITTEST_RESIZE_BOTTOMLEFT;
+                if (bottom && right)
+                    return SDL_HITTEST_RESIZE_BOTTOMRIGHT;
+                if (left)
+                    return SDL_HITTEST_RESIZE_LEFT;
+                if (right)
+                    return SDL_HITTEST_RESIZE_RIGHT;
+                if (top)
+                    return SDL_HITTEST_RESIZE_TOP;
+                if (bottom)
+                    return SDL_HITTEST_RESIZE_BOTTOM;
+            }
+
+            if (self->isTitlebarDragPoint(area->x, area->y)) {
+                if (self->usesEventDrivenTitlebarDrag())
+                    return SDL_HITTEST_NORMAL;
+                return SDL_HITTEST_DRAGGABLE;
+            }
 
             return SDL_HITTEST_NORMAL;
         }
@@ -249,6 +331,11 @@ namespace lfs::vis {
             std::cerr << "Failed to create SDL window: " << SDL_GetError() << std::endl;
             SDL_Quit();
             return false;
+        }
+
+        native_titlebar_move_available_ = hasX11NativeMoveSupport(window_);
+        if (native_titlebar_move_available_) {
+            LOG_DEBUG("Using X11 native titlebar move for borderless window drag");
         }
 
         if (!SDL_SetWindowHitTest(window_, borderlessWindowHitTest, this)) {
@@ -364,6 +451,7 @@ namespace lfs::vis {
             processEvent(event);
         }
         frame_input_.finalize(window_);
+        flushPendingTitlebarDoubleClick();
     }
 
     void WindowManager::waitEvents(double timeout_seconds) {
@@ -385,6 +473,7 @@ namespace lfs::vis {
             }
         }
         frame_input_.finalize(window_);
+        flushPendingTitlebarDoubleClick();
     }
 
     bool WindowManager::shouldClose() const {
@@ -411,21 +500,18 @@ namespace lfs::vis {
 
         switch (event.type) {
         case SDL_EVENT_QUIT:
-            endWindowDrag();
             should_close_ = true;
             break;
 
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             if (!eventTargetsWindow(event, main_window_id))
                 break;
-            endWindowDrag();
             should_close_ = true;
             break;
 
         case SDL_EVENT_WINDOW_FOCUS_LOST:
             if (!eventTargetsWindow(event, main_window_id))
                 break;
-            endWindowDrag();
             lfs::core::events::internal::WindowFocusLost{}.emit();
             input_router_.onWindowFocusLost();
             if (input_controller_) {
@@ -449,8 +535,6 @@ namespace lfs::vis {
         case SDL_EVENT_WINDOW_RESTORED:
             if (!eventTargetsWindow(event, main_window_id))
                 break;
-            if (event.type == SDL_EVENT_WINDOW_MINIMIZED)
-                endWindowDrag();
             LOG_DEBUG("SDL window event: {} data1={} data2={} fullscreen={}",
                       windowEventName(event.type),
                       event.window.data1,
@@ -462,7 +546,6 @@ namespace lfs::vis {
         case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
             if (!eventTargetsWindow(event, main_window_id))
                 break;
-            endWindowDrag();
             is_fullscreen_ = true;
             LOG_DEBUG("SDL window event: {} data1={} data2={}",
                       windowEventName(event.type),
@@ -486,6 +569,19 @@ namespace lfs::vis {
         case SDL_EVENT_MOUSE_BUTTON_UP: {
             if (!eventTargetsWindow(event, main_window_id))
                 break;
+            const int mouse_x = static_cast<int>(std::round(event.button.x));
+            const int mouse_y = static_cast<int>(std::round(event.button.y));
+            const bool titlebar_point = isTitlebarDragPoint(mouse_x, mouse_y);
+            if (event.button.button == SDL_BUTTON_LEFT && titlebar_point) {
+                if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                    if (event.button.clicks >= 2 || pending_titlebar_double_click_) {
+                        pending_titlebar_double_click_ = true;
+                    } else if (native_titlebar_move_available_) {
+                        beginTitlebarNativeMove();
+                    }
+                }
+                break;
+            }
             if (!input_controller_)
                 break;
             const int button = input::sdlMouseButtonToApp(event.button.button);
@@ -560,7 +656,6 @@ namespace lfs::vis {
     void WindowManager::setFullscreen(const bool fullscreen) {
         if (!window_)
             return;
-        endWindowDrag();
 
         LOG_DEBUG("setFullscreen request: target={}, current={}, logical={}x{}, framebuffer={}x{}",
                   fullscreen,
@@ -614,7 +709,6 @@ namespace lfs::vis {
     void WindowManager::minimize() {
         if (!window_)
             return;
-        endWindowDrag();
         if (!SDL_MinimizeWindow(window_))
             LOG_WARN("Failed to minimize window: {}", SDL_GetError());
     }
@@ -622,7 +716,6 @@ namespace lfs::vis {
     void WindowManager::toggleMaximized() {
         if (!window_)
             return;
-        endWindowDrag();
 
         if (isMaximized()) {
             if (!SDL_RestoreWindow(window_)) {
@@ -640,36 +733,48 @@ namespace lfs::vis {
         wakeEventLoop();
     }
 
-    void WindowManager::beginWindowDrag() {
-        if (!window_ || is_fullscreen_)
-            return;
+    void WindowManager::setTitlebarDragRegion(const int height_px, std::vector<HitTestRect> excluded_rects) {
+        titlebar_drag_height_px_ = std::max(0, height_px);
+        titlebar_drag_excluded_rects_ = std::move(excluded_rects);
+    }
 
-        if (isMaximized()) {
-            if (!SDL_RestoreWindow(window_)) {
-                LOG_WARN("Failed to restore window before drag: {}", SDL_GetError());
-                manual_window_drag_active_ = false;
-                return;
-            }
-            updateWindowSize("beginWindowDrag-restore");
+    void WindowManager::clearTitlebarDragRegion() {
+        titlebar_drag_height_px_ = 0;
+        titlebar_drag_excluded_rects_.clear();
+        pending_titlebar_double_click_ = false;
+    }
+
+    bool WindowManager::isTitlebarDragPoint(const int x, const int y) const {
+        if (titlebar_drag_height_px_ <= 0 || y < 0 || y >= titlebar_drag_height_px_)
+            return false;
+
+        for (const auto& rect : titlebar_drag_excluded_rects_) {
+            if (rect.w <= 0 || rect.h <= 0)
+                continue;
+            if (x >= rect.x && x < rect.x + rect.w &&
+                y >= rect.y && y < rect.y + rect.h)
+                return false;
         }
 
-        SDL_GetWindowPosition(window_, &manual_drag_window_pos_.x, &manual_drag_window_pos_.y);
-        SDL_GetGlobalMouseState(&manual_drag_mouse_pos_.x, &manual_drag_mouse_pos_.y);
-        manual_window_drag_active_ = true;
+        return true;
     }
 
-    void WindowManager::updateWindowDrag() {
-        if (!window_ || !manual_window_drag_active_)
+    void WindowManager::beginTitlebarNativeMove() {
+        if (!window_ || is_fullscreen_ || !native_titlebar_move_available_)
             return;
 
-        glm::vec2 mouse_pos{0.0f, 0.0f};
-        SDL_GetGlobalMouseState(&mouse_pos.x, &mouse_pos.y);
-        const glm::ivec2 next_pos = manual_drag_window_pos_ + glm::ivec2(glm::round(mouse_pos - manual_drag_mouse_pos_));
-        SDL_SetWindowPosition(window_, next_pos.x, next_pos.y);
+        if (!requestX11WindowMove(window_)) {
+            native_titlebar_move_available_ = false;
+            LOG_WARN("Failed to start native titlebar window move; falling back to SDL hit-testing");
+        }
     }
 
-    void WindowManager::endWindowDrag() {
-        manual_window_drag_active_ = false;
+    void WindowManager::flushPendingTitlebarDoubleClick() {
+        if (!pending_titlebar_double_click_)
+            return;
+
+        pending_titlebar_double_click_ = false;
+        toggleMaximized();
     }
 
 } // namespace lfs::vis
