@@ -7,6 +7,7 @@
 #include "input/frame_input_buffer.hpp"
 #include "input/input_router.hpp"
 #include "visualizer/visualizer.hpp"
+#include <chrono>
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <memory>
@@ -55,6 +56,7 @@ namespace lfs::vis {
         VulkanContext* getVulkanContext() const { return vulkan_context_.get(); }
         glm::ivec2 getWindowSize() const { return window_size_; }
         glm::ivec2 getFramebufferSize() const { return framebuffer_size_; }
+        [[nodiscard]] bool hasRecentWindowSizeChange(std::chrono::steady_clock::duration max_age) const;
         bool isFullscreen() const { return is_fullscreen_; }
         bool isMaximized() const;
         void minimize();
@@ -81,6 +83,7 @@ namespace lfs::vis {
         std::string title_;
         glm::ivec2 window_size_;
         glm::ivec2 framebuffer_size_;
+        std::chrono::steady_clock::time_point last_window_size_change_time_{};
 
         glm::ivec2 monitor_pos_{0, 0};
         glm::ivec2 monitor_size_{0, 0};

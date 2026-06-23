@@ -511,6 +511,15 @@ namespace lfs::vis {
         [[nodiscard]] bool isViewportResizeDeferring() const {
             return frame_lifecycle_service_.isResizeDeferring();
         }
+        [[nodiscard]] bool hasPendingViewportResizeSettle() const {
+            return frame_lifecycle_service_.hasPendingResizeSettle();
+        }
+        [[nodiscard]] bool viewportResizeSettleReady() const {
+            return frame_lifecycle_service_.resizeSettleReady();
+        }
+        [[nodiscard]] double secondsUntilViewportResizeSettleReady() const {
+            return frame_lifecycle_service_.secondsUntilResizeSettleReady();
+        }
         bool consumeResizeCompleted() { return frame_lifecycle_service_.consumeResizeCompleted(); }
 
         // LOD management

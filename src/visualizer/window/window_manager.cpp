@@ -28,6 +28,8 @@
 namespace lfs::vis {
 
     namespace {
+        constexpr double kPendingResizeMinWaitSeconds = 0.001;
+
         const char* windowEventName(const Uint32 event_type) {
             switch (event_type) {
             case SDL_EVENT_WINDOW_RESIZED:
@@ -399,6 +401,7 @@ namespace lfs::vis {
 
         const auto flags = SDL_GetWindowFlags(window_);
         if (size_changed) {
+            last_window_size_change_time_ = std::chrono::steady_clock::now();
             LOG_DEBUG("Window size update [{}]: logical {}x{} -> {}x{}, framebuffer {}x{} -> {}x{}, fullscreen={}, flags=0x{:x}",
                       reason,
                       window_size_.x,
@@ -432,6 +435,14 @@ namespace lfs::vis {
         }
     }
 
+    bool WindowManager::hasRecentWindowSizeChange(
+        const std::chrono::steady_clock::duration max_age) const {
+        if (last_window_size_change_time_ == std::chrono::steady_clock::time_point{}) {
+            return false;
+        }
+        return std::chrono::steady_clock::now() - last_window_size_change_time_ <= max_age;
+    }
+
     void WindowManager::swapBuffers() {
         if (vulkan_context_) {
             if (!vulkan_context_->presentBootstrapFrame(0.11f, 0.11f, 0.14f, 1.0f)) {
@@ -461,9 +472,13 @@ namespace lfs::vis {
         const bool imgui_ready = ImGui::GetCurrentContext() != nullptr;
         const SDL_WindowID main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
         SDL_Event event;
-        if (vulkan_context_ && vulkan_context_->hasPendingSwapchainResize()) {
+        if (vulkan_context_ &&
+            vulkan_context_->hasPendingSwapchainResize()) {
+            const double resize_wait = vulkan_context_->secondsUntilPendingSwapchainResizeReady();
             timeout_seconds = std::min(timeout_seconds,
-                                       std::max(0.0, vulkan_context_->secondsUntilPendingSwapchainResizeReady()));
+                                       resize_wait > 0.0
+                                           ? std::max(kPendingResizeMinWaitSeconds, resize_wait)
+                                           : 0.0);
         }
         const int timeout_ms = static_cast<int>(timeout_seconds * 1000.0);
         if (SDL_WaitEventTimeout(&event, timeout_ms)) {

@@ -133,6 +133,7 @@ namespace lfs::vis::gui {
         constexpr auto kInteractiveTransitionGuardDuration = std::chrono::milliseconds(1200);
         constexpr auto kInteractiveIdleToggleMinInterval = std::chrono::milliseconds(750);
         constexpr auto kInteractiveTrainingToggleMinInterval = std::chrono::milliseconds(3000);
+        constexpr auto kCachedImGuiResizeFrameWindow = std::chrono::milliseconds(160);
 
         [[nodiscard]] std::string formatLodCount(const std::size_t value) {
             constexpr double kThousand = 1'000.0;
@@ -5243,6 +5244,64 @@ namespace lfs::vis::gui {
         return std::chrono::steady_clock::now() < interactive_transition_guard_until_;
     }
 
+    bool GuiManager::shouldUseCachedImGuiResizeFrame(
+        const WindowManager* const window_manager,
+        const VulkanContext* const vulkan_context) const {
+        if (!window_manager || !vulkan_context) {
+            return false;
+        }
+
+        const glm::ivec2 window_size = window_manager->getWindowSize();
+        const glm::ivec2 framebuffer_size = window_manager->getFramebufferSize();
+        const bool active_window_resize =
+            vulkan_context->hasPendingSwapchainResize() ||
+            window_manager->hasRecentWindowSizeChange(kCachedImGuiResizeFrameWindow);
+        return active_window_resize &&
+               window_size.x > 0 && window_size.y > 0 &&
+               framebuffer_size.x > 0 && framebuffer_size.y > 0;
+    }
+
+    void GuiManager::beginImGuiPlatformFrame(WindowManager* const window_manager,
+                                             VulkanContext* const vulkan_context) {
+        const auto now = std::chrono::steady_clock::now();
+        const auto update_delta_time = [&]() -> float {
+            if (last_imgui_platform_frame_time_ == std::chrono::steady_clock::time_point{}) {
+                last_imgui_platform_frame_time_ = now;
+                return 1.0f / 60.0f;
+            }
+
+            const auto elapsed = std::chrono::duration<float>(now - last_imgui_platform_frame_time_).count();
+            last_imgui_platform_frame_time_ = now;
+            return std::clamp(elapsed, 1.0f / 240.0f, 1.0f / 15.0f);
+        };
+
+        if (shouldUseCachedImGuiResizeFrame(window_manager, vulkan_context)) {
+            ImGuiIO& io = ImGui::GetIO();
+            const glm::ivec2 window_size = window_manager->getWindowSize();
+            const glm::ivec2 framebuffer_size = window_manager->getFramebufferSize();
+            io.DisplaySize = ImVec2(static_cast<float>(window_size.x),
+                                    static_cast<float>(window_size.y));
+            io.DisplayFramebufferScale = ImVec2(
+                static_cast<float>(framebuffer_size.x) / static_cast<float>(window_size.x),
+                static_cast<float>(framebuffer_size.y) / static_cast<float>(window_size.y));
+            io.DeltaTime = update_delta_time();
+            ++cached_imgui_resize_frame_count_;
+            used_cached_imgui_resize_frame_ = true;
+            return;
+        }
+
+        ImGui_ImplSDL3_NewFrame();
+        if (used_cached_imgui_resize_frame_) {
+            ImGui::GetIO().DeltaTime = update_delta_time();
+            used_cached_imgui_resize_frame_ = false;
+            LOG_PERF("gui_render.imgui_newFrame_cached_resize frames={}",
+                     cached_imgui_resize_frame_count_);
+            cached_imgui_resize_frame_count_ = 0;
+        } else {
+            last_imgui_platform_frame_time_ = now;
+        }
+    }
+
     void GuiManager::render() {
         auto* window_manager = viewer_ ? viewer_->getWindowManager() : nullptr;
         auto* vulkan_context = (vulkan_gui_ && window_manager) ? window_manager->getVulkanContext() : nullptr;
@@ -5287,7 +5346,7 @@ namespace lfs::vis::gui {
         // Start frame
         {
             LOG_TIMER_THRESHOLD("gui_render.imgui_newFrame", 0.25);
-            ImGui_ImplSDL3_NewFrame();
+            beginImGuiPlatformFrame(window_manager, vulkan_context);
             if (auto* input_controller = viewer_->getInputController())
                 input_controller->applySplitterCursorOverride();
             rmlui_manager_.clearVulkanQueue();
