@@ -15,7 +15,6 @@ on:
 
 jobs:
   build-ubuntu:
-    if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
     runs-on: ubuntu-24.04
     container:
       image: nvidia/cuda:12.8.0-devel-ubuntu24.04
@@ -140,3 +139,23 @@ jobs:
 
       - name: Build
         run: cmake --build build -j $(nproc)
+
+      - name: Package build
+        run: |
+          mkdir -p artifacts
+    
+          # 根据你的项目实际输出文件修改
+          cp -r build/bin artifacts/
+    
+          # 如果有资源文件
+          [ -d build/resources ] && cp -r build/resources artifacts/
+    
+          tar -czf LichtFeld-Studio-Linux-${{ matrix.build_type }}.tar.gz artifacts
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LichtFeld-Studio-Linux-${{ matrix.build_type }}
+          path: LichtFeld-Studio-Linux-${{ matrix.build_type }}.tar.gz
+          compression-level: 0
+          retention-days: 30
